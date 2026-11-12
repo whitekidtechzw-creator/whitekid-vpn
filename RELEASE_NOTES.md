@@ -1,12 +1,11 @@
-# 🔥 Whitekid VPN 1.14.0: "Aura"
+# 📱 Whitekid VPN 1.14.2: "Everything on the first screen"
 
-**The whole app got more glow and more life.**
-- **Dial:** pulsing neon aura, radar ripples leaving the dial while connected, glowing speed arc, orbiting comet while connecting, idle ticks that breathe, springy press-down feel
-- **Connect screen:** background light that changes with the state (green connected, amber connecting, red failed), glowing status headline
-- **Nav bar:** selected tab gets a glowing pill, bouncy icon and gradient line
-- **Shield switch:** rounded with a gradient fill
-- **Palette:** deeper blue-black carbon, 3 new accents (Neon violet, Electric cyan, Hot pink) in the accent picker
-- Version 1.14.0 (code 15). Edits only in `MainActivity.kt` (Dial, WkNavBar, HomeScreen) and `Theme.kt`
+The Connect screen now fits what you need WITHOUT scrolling, like other VPN apps:
+- Status headline, DOWNLOADED / UPLOADED tiles (live speed while connected), pill with DURATION, PING and PROTOCOL
+- **NETWORK** card (with a round **+** to add servers) and **SERVER** card (tap to pick, Auto select included)
+- Custom DNS tick, then the big glowing power dial
+- Below it, scroll for the server cards, graph, details, SSL / SNI mode and shield
+- Version 1.14.2 (code 17). Edits in `Labs6.kt` and `MainActivity.kt`
 
 ⚠️ Not compiled here. If the build complains, send me the first red line of the log.
 

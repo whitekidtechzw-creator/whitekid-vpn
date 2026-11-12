@@ -228,6 +228,7 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
             "quick" -> quickConnect()
             "servers" -> tab = 1
             "tools" -> tab = 2
+            "about" -> tab = 3
             "telegram", "support" -> open(ctx, TELEGRAM)
             "share" -> ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
                 .putExtra(Intent.EXTRA_TEXT, "$APP_TITLE — get it on Telegram: $TELEGRAM"), "Share"))
@@ -236,10 +237,9 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
         }
     }
 
-    ModalNavigationDrawer(drawerState = drawer, drawerContent = { DrawerSheet(ver) { onDrawer(it) } }) {
+    ModalNavigationDrawer(drawerState = drawer, drawerContent = { WkDrawer(ver, status) { onDrawer(it) } }) {
     Scaffold(
-        containerColor = WkBg,
-        bottomBar = { WkNavBar(tab) { tab = it } }
+        containerColor = WkBg
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
@@ -262,11 +262,13 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
                             else startConnect(np)
                         }
                     }) { tab = 1 }
-                1 -> ServersScreen(profiles, current?.id ?: "", incoming, onSelect = { selected = it; Store.selectedId = it }) {
-                    Store.saveProfiles(profiles.toList())
+                1 -> SubScreen({ tab = 0 }) {
+                    ServersScreen(profiles, current?.id ?: "", incoming, onSelect = { selected = it; Store.selectedId = it }) {
+                        Store.saveProfiles(profiles.toList())
+                    }
                 }
-                2 -> ToolsScreen(profiles, exit)
-                else -> AboutScreen()
+                2 -> SubScreen({ tab = 0 }) { ToolsScreen(profiles, exit) }
+                else -> SubScreen({ tab = 0 }) { AboutScreen() }
             }
         }
     }
@@ -404,7 +406,7 @@ fun HomeScreen(
             }
             IconButton(onClick = onMenu) { Icon(Icons.Default.Menu, "Menu", tint = WkText) }
         }
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(8.dp))
 
         // ---- headline: state on the left, session clock on the right
         Row(verticalAlignment = Alignment.Bottom) {
@@ -414,7 +416,6 @@ fun HomeScreen(
                         else androidx.compose.ui.graphics.Shadow(col.copy(alpha = 0.65f), Offset.Zero, 26f)))
                 if (sub.isNotBlank()) Text(sub, color = WkMuted, fontSize = 13.sp, maxLines = 1)
             }
-            if (on) Text("%d:%02d:%02d".format(secs / 3600, secs / 60 % 60, secs % 60), fontFamily = FontFamily.Monospace, fontSize = 20.sp, color = WkText)
         }
         if (status == Status.ERROR && msg.isNotBlank()) {
             Text(msg, color = WkRed, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
@@ -423,8 +424,28 @@ fun HomeScreen(
 
         L3Banner(p)
 
+        // ---- v1.14.1: everything you need on the first screen: traffic, network, server, DNS, then the power dial
+        Spacer(Modifier.height(10.dp))
+        TrafficStrip(bytes(rx), bytes(tx), if (on) "↓ " + rateText(rxS) else "DOWNLOADED", if (on) "↑ " + rateText(txS) else "UPLOADED")
+        Spacer(Modifier.height(10.dp))
+        InfoPill("DURATION" to "%d:%02d:%02d".format(secs / 3600, secs / 60 % 60, secs % 60),
+            "PING" to (if (on && ping >= 0) "$ping ms" else "—"), "PROTOCOL" to (p?.proto?.label ?: "—"))
+        Spacer(Modifier.height(12.dp))
+        SelectorCard("NETWORK", group, "${inGroup.size} server" + (if (inGroup.size == 1) "" else "s"), group.take(2).uppercase(),
+            groups.map { it to it }, { onGroup(it) }, onPlus = openServers)
+        Spacer(Modifier.height(10.dp))
+        SelectorCard("SERVER", if (Store.autoPick) "Auto select" else (p?.name ?: "None"),
+            if (Store.autoPick) "Fastest server, picked at connect" else (p?.let { "${it.proto.label} • ${it.detail()}" } ?: "Tap + to add a server"),
+            if (Store.autoPick) "⚡" else (p?.proto?.label?.take(2)?.uppercase() ?: "—"),
+            listOf("auto" to "Auto select (fastest)") + inGroup.map { it.id to it.name }, { onPick(it) })
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { customDns = !customDns; Store.customDns = customDns }) {
+            Checkbox(customDns, { customDns = it; Store.customDns = it })
+            Text("Custom DNS", modifier = Modifier.weight(1f), fontSize = 14.sp)
+            Text(Store.effectiveDns().substringBefore(","), color = WkMuted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+        }
+
         // ---- dial
-        Box(Modifier.fillMaxWidth().padding(vertical = 0.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().padding(top = 0.dp, bottom = 6.dp), contentAlignment = Alignment.Center) {
             Dial(status, rxS + txS, onToggle)
         }
 
@@ -450,6 +471,9 @@ fun HomeScreen(
         L3Usage(today)
         if (on) SpeedGraph(graph, Modifier.padding(top = 12.dp))
         L3Insights(status, p, ping, rx, tx, secs, graph, okN, badN)
+
+        // ---- servers (v1.14: now right on the Connect screen)
+        ServerDeck(profiles, group, p?.id, Store.autoPick, status, onPick = onPick, onManage = openServers)
 
         // ---- live details
         if (on) {
@@ -485,30 +509,9 @@ fun HomeScreen(
             if (plain.isNotEmpty()) Text(plain, color = WkMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
         }
 
-        // ---- route
-        Spacer(Modifier.height(22.dp))
-        Text("ROUTE", color = WkMint, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 2.sp)
-        HorizontalDivider(color = WkLine, modifier = Modifier.padding(top = 6.dp, bottom = 10.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Picker("NETWORK", group, groups.map { it to it }, Modifier.weight(1f)) { onGroup(it) }
-            Picker("SERVER", if (Store.autoPick) "Auto select" else (p?.name ?: "None"),
-                listOf("auto" to "Auto select (fastest)") + inGroup.map { it.id to it.name }, Modifier.weight(1f)) { onPick(it) }
-        }
+        // ---- more routing
+        Spacer(Modifier.height(12.dp))
         L3FindFastest(inGroup, onPick)
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
-            Checkbox(customDns, { customDns = it; Store.customDns = it })
-            Text("Custom DNS", modifier = Modifier.weight(1f), fontSize = 14.sp)
-            Text(Store.effectiveDns().substringBefore(","), color = WkMuted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-        }
-        Row(Modifier.fillMaxWidth().clickable { openServers() }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(p?.name ?: "Tap to add a server", fontWeight = FontWeight.SemiBold, maxLines = 1)
-                Text(if (p == null) "Paste a link, config or tweak code" else "${p.proto.label} • ${p.detail()}" +
-                    (p.expiryText()?.let { " • $it" } ?: "") + (Store.reliability(p.id)?.let { " • $it% reliable" } ?: ""),
-                    color = WkMuted, fontSize = 12.sp, maxLines = 1)
-            }
-            Text("›", color = WkMuted, fontSize = 22.sp)
-        }
 
         SslPanel(onSsl)
 
