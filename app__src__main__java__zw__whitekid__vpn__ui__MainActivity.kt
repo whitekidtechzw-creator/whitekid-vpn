@@ -52,6 +52,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -59,6 +61,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -299,12 +303,18 @@ fun WkNavBar(tab: Int, onTab: (Int) -> Unit) {
         Row(Modifier.fillMaxWidth()) {
             items.forEachIndexed { i, (l, ic) ->
                 val sel = tab == i
+                val sc by animateFloatAsState(if (sel) 1.18f else 1f, spring(dampingRatio = 0.5f, stiffness = 400f), label = "navScale")
+                val pill by animateFloatAsState(if (sel) 1f else 0f, tween(260), label = "navPill")
                 Column(Modifier.weight(1f).clickable { onTab(i) }, horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.fillMaxWidth().height(2.dp).background(if (sel) WkMint else Color.Transparent))
-                    Spacer(Modifier.height(8.dp))
-                    Icon(ic, l, tint = if (sel) WkMint else WkMuted, modifier = Modifier.size(22.dp))
+                    Box(Modifier.fillMaxWidth().height(2.dp).background(
+                        Brush.horizontalGradient(listOf(Color.Transparent, WkMint.copy(alpha = pill), Color.Transparent))))
+                    Spacer(Modifier.height(6.dp))
+                    Box(Modifier.clip(RoundedCornerShape(14.dp)).background(WkMint.copy(alpha = 0.16f * pill))
+                        .padding(horizontal = 18.dp, vertical = 4.dp)) {
+                        Icon(ic, l, tint = if (sel) WkMint else WkMuted, modifier = Modifier.size(22.dp).scale(sc))
+                    }
                     Text(l, fontSize = 9.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold, color = if (sel) WkMint else WkMuted,
-                        modifier = Modifier.padding(top = 3.dp, bottom = 9.dp))
+                        modifier = Modifier.padding(top = 2.dp, bottom = 9.dp))
                 }
             }
         }
@@ -370,7 +380,13 @@ fun HomeScreen(
         Status.IDLE -> if (p != null) "Ready: ${p.name}" else "Add a server to begin"
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 14.dp)) {
+    val glowA = when (status) { Status.IDLE -> 0.05f; Status.CONNECTING -> 0.13f; else -> 0.17f }
+    Column(Modifier.fillMaxSize()
+        .drawBehind {
+            drawRect(Brush.radialGradient(listOf(col.copy(alpha = glowA), Color.Transparent),
+                center = Offset(size.width / 2f, size.height * 0.30f), radius = size.width * 1.15f))
+        }
+        .verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 14.dp)) {
         // ---- top bar
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.logo), null, Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)))
@@ -393,7 +409,9 @@ fun HomeScreen(
         // ---- headline: state on the left, session clock on the right
         Row(verticalAlignment = Alignment.Bottom) {
             Column(Modifier.weight(1f)) {
-                Text(label, color = col, fontSize = 30.sp, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp)
+                Text(label, color = col, fontSize = 32.sp, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp,
+                    style = androidx.compose.ui.text.TextStyle(shadow = if (status == Status.IDLE) null
+                        else androidx.compose.ui.graphics.Shadow(col.copy(alpha = 0.65f), Offset.Zero, 26f)))
                 if (sub.isNotBlank()) Text(sub, color = WkMuted, fontSize = 13.sp, maxLines = 1)
             }
             if (on) Text("%d:%02d:%02d".format(secs / 3600, secs / 60 % 60, secs % 60), fontFamily = FontFamily.Monospace, fontSize = 20.sp, color = WkText)
@@ -406,7 +424,7 @@ fun HomeScreen(
         L3Banner(p)
 
         // ---- dial
-        Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().padding(vertical = 0.dp), contentAlignment = Alignment.Center) {
             Dial(status, rxS + txS, onToggle)
         }
 
@@ -498,9 +516,9 @@ fun HomeScreen(
         Spacer(Modifier.height(14.dp))
         Text("SHIELD", color = WkMint, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 2.sp)
         HorizontalDivider(color = WkLine, modifier = Modifier.padding(top = 6.dp, bottom = 10.dp))
-        Row(Modifier.fillMaxWidth().border(1.dp, WkLine)) {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).border(1.dp, WkLine, RoundedCornerShape(10.dp))) {
             listOf("SPEED", "BALANCED", "FORTRESS").forEachIndexed { i, l ->
-                Box(Modifier.weight(1f).background(if (shield == i) WkMint else Color.Transparent)
+                Box(Modifier.weight(1f).background(if (shield == i) Brush.horizontalGradient(listOf(WkMint.copy(alpha = 0.78f), WkMint)) else Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent)))
                     .clickable { shield = i; Store.shield = i }.padding(vertical = 11.dp), contentAlignment = Alignment.Center) {
                     Text(l, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp, color = if (shield == i) WkBg else WkText)
                 }
@@ -593,30 +611,67 @@ fun quality(ms: Int, slow: Boolean): Pair<String, Color> {
 fun Dial(status: Status, speed: Long, onClick: () -> Unit) {
     val inf = rememberInfiniteTransition(label = "dial")
     val spin by inf.animateFloat(0f, 360f, infiniteRepeatable(tween(1500, easing = LinearEasing)), label = "spin")
+    val pulse by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(2600, easing = LinearEasing)), label = "pulse")
+    val breathe by inf.animateFloat(0.55f, 1f, infiniteRepeatable(tween(1900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe")
     val on = status == Status.CONNECTED
     val col = when (status) { Status.CONNECTED -> WkOk; Status.CONNECTING -> WkViolet; Status.ERROR -> WkRed; Status.IDLE -> WkMuted }
     val target = if (on) (Math.log10(speed.toDouble() + 10.0) / 7.0).coerceIn(0.05, 1.0).toFloat() * 270f else 0f
     val sweep by animateFloatAsState(target, tween(700), label = "sweep")
+    var pressed by remember { mutableStateOf(false) }
+    val press by animateFloatAsState(if (pressed) 0.94f else 1f, spring(dampingRatio = 0.45f, stiffness = 500f), label = "press")
     val track = WkLine
-    Box(Modifier.size(244.dp).clip(CircleShape).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+    val ringCol = WkMint
+    Box(Modifier.size(296.dp), contentAlignment = Alignment.Center) {
+        // aura: soft glow plus radar ripples that leave the dial while connected
         Canvas(Modifier.fillMaxSize()) {
             val r = size.minDimension / 2
-            for (i in 0 until 60) {
-                val a = Math.toRadians(i * 6.0 - 90.0)
-                val len = if (i % 5 == 0) 10.dp.toPx() else 5.dp.toPx()
-                val o = r - 2.dp.toPx(); val n = o - len
-                drawLine(if (on && ((i * 6 + 135) % 360) <= sweep) col else track,
-                    Offset(center.x + (n * Math.cos(a)).toFloat(), center.y + (n * Math.sin(a)).toFloat()),
-                    Offset(center.x + (o * Math.cos(a)).toFloat(), center.y + (o * Math.sin(a)).toFloat()), 1.5.dp.toPx())
+            val dialR = 122.dp.toPx()
+            val strength = when (status) { Status.CONNECTED -> breathe; Status.CONNECTING -> 0.8f; Status.ERROR -> 0.6f; Status.IDLE -> 0.22f + 0.2f * breathe }
+            val glowCol = if (status == Status.IDLE) ringCol else col
+            drawCircle(Brush.radialGradient(listOf(glowCol.copy(alpha = 0.38f * strength), glowCol.copy(alpha = 0.10f * strength), Color.Transparent),
+                center = center, radius = r), r, center)
+            if (on || status == Status.CONNECTING) {
+                for (k in 0..2) {
+                    val t = (pulse + k / 3f) % 1f
+                    drawCircle(col.copy(alpha = (1f - t) * 0.38f), dialR + (r - dialR) * t, center, style = Stroke(1.6.dp.toPx()))
+                }
             }
-            val pad = 30.dp.toPx(); val d = size.minDimension - pad * 2
-            val tl = Offset(pad, pad); val sz = Size(d, d); val w = 9.dp.toPx()
-            drawArc(if (status == Status.ERROR) col.copy(alpha = 0.35f) else track, 135f, 270f, false, tl, sz, style = Stroke(w))
-            if (on) drawArc(col, 135f, sweep, false, tl, sz, style = Stroke(w))
-            if (status == Status.CONNECTING) drawArc(col, spin, 80f, false, tl, sz, style = Stroke(w, cap = StrokeCap.Round))
-            val c = center; val pr = 30.dp.toPx()
-            drawArc(col, -60f, 300f, false, Offset(c.x - pr, c.y - pr + 4), Size(pr * 2, pr * 2), style = Stroke(5.dp.toPx(), cap = StrokeCap.Round))
-            drawLine(col, Offset(c.x, c.y - pr - 8), Offset(c.x, c.y - 2), 5.dp.toPx(), StrokeCap.Round)
+        }
+        Box(Modifier.size(244.dp).scale(press).clip(CircleShape)
+            .pointerInput(Unit) { detectTapGestures(onPress = { pressed = true; tryAwaitRelease(); pressed = false }, onTap = { onClick() }) },
+            contentAlignment = Alignment.Center) {
+            Canvas(Modifier.fillMaxSize()) {
+                val r = size.minDimension / 2
+                for (i in 0 until 60) {
+                    val a = Math.toRadians(i * 6.0 - 90.0)
+                    val big = i % 5 == 0
+                    val len = if (big) 10.dp.toPx() else 5.dp.toPx()
+                    val o = r - 2.dp.toPx(); val n = o - len
+                    val lit = on && ((i * 6 + 135) % 360) <= sweep
+                    val idleSpark = status == Status.IDLE && big
+                    drawLine(if (lit) col else if (idleSpark) ringCol.copy(alpha = 0.35f + 0.4f * breathe) else track,
+                        Offset(center.x + (n * Math.cos(a)).toFloat(), center.y + (n * Math.sin(a)).toFloat()),
+                        Offset(center.x + (o * Math.cos(a)).toFloat(), center.y + (o * Math.sin(a)).toFloat()),
+                        (if (lit) 2.2.dp else 1.5.dp).toPx())
+                }
+                val pad = 30.dp.toPx(); val d = size.minDimension - pad * 2
+                val tl = Offset(pad, pad); val sz = Size(d, d); val w = 9.dp.toPx()
+                drawArc(if (status == Status.ERROR) col.copy(alpha = 0.35f) else track, 135f, 270f, false, tl, sz, style = Stroke(w))
+                if (on) {
+                    drawArc(col.copy(alpha = 0.22f), 135f, sweep, false, tl, sz, style = Stroke(w * 2.4f, cap = StrokeCap.Round))
+                    drawArc(col, 135f, sweep, false, tl, sz, style = Stroke(w, cap = StrokeCap.Round))
+                }
+                if (status == Status.CONNECTING) {
+                    drawArc(col.copy(alpha = 0.25f), spin, 80f, false, tl, sz, style = Stroke(w * 2.4f, cap = StrokeCap.Round))
+                    drawArc(col, spin, 80f, false, tl, sz, style = Stroke(w, cap = StrokeCap.Round))
+                    drawArc(col.copy(alpha = 0.5f), spin + 180f, 40f, false, tl, sz, style = Stroke(w * 0.6f, cap = StrokeCap.Round))
+                }
+                val c = center; val pr = 30.dp.toPx()
+                if (status != Status.IDLE) drawCircle(Brush.radialGradient(listOf(col.copy(alpha = 0.22f * (if (on) breathe else 1f)), Color.Transparent), c, pr * 2.2f), pr * 2.2f, c)
+                val iconCol = if (status == Status.IDLE) ringCol.copy(alpha = 0.55f + 0.45f * breathe) else col
+                drawArc(iconCol, -60f, 300f, false, Offset(c.x - pr, c.y - pr + 4), Size(pr * 2, pr * 2), style = Stroke(5.dp.toPx(), cap = StrokeCap.Round))
+                drawLine(iconCol, Offset(c.x, c.y - pr - 8), Offset(c.x, c.y - 2), 5.dp.toPx(), StrokeCap.Round)
+            }
         }
     }
 }

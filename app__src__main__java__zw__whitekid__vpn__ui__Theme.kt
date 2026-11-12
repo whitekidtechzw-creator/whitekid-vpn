@@ -24,7 +24,8 @@ import zw.whitekid.vpn.data.Store
 
 val ACCENTS = listOf(
     "Signal orange" to Color(0xFFFF6B35), "Amber" to Color(0xFFF2B134), "Emerald" to Color(0xFF3DD68C),
-    "Ice" to Color(0xFF6CC4FF), "Rose" to Color(0xFFFF6F91), "Lime" to Color(0xFFB7E34D)
+    "Ice" to Color(0xFF6CC4FF), "Rose" to Color(0xFFFF6F91), "Lime" to Color(0xFFB7E34D),
+    "Neon violet" to Color(0xFFA78BFA), "Electric cyan" to Color(0xFF22E5FF), "Hot pink" to Color(0xFFFF3EA5)
 )
 
 private var darkMode by mutableStateOf(true)
@@ -40,9 +41,9 @@ fun applyTheme(systemDark: Boolean) {
 fun isDarkNow() = darkMode
 
 // Carbon and bone: warm near-black, off-white text, one signal accent. Green only ever means "connected".
-val WkBg: Color get() = if (darkMode) (if (amoledOn) Color(0xFF000000) else Color(0xFF0D0E10)) else Color(0xFFF3F1EC)
-val WkCard: Color get() = if (darkMode) (if (amoledOn) Color(0xFF0B0C0D) else Color(0xFF17191C)) else Color(0xFFFFFFFF)
-val WkLine: Color get() = if (darkMode) (if (amoledOn) Color(0xFF24262A) else Color(0xFF2A2D32)) else Color(0xFFD9D5CB)
+val WkBg: Color get() = if (darkMode) (if (amoledOn) Color(0xFF000000) else Color(0xFF0A0C12)) else Color(0xFFF3F1EC)
+val WkCard: Color get() = if (darkMode) (if (amoledOn) Color(0xFF0B0C0D) else Color(0xFF141720)) else Color(0xFFFFFFFF)
+val WkLine: Color get() = if (darkMode) (if (amoledOn) Color(0xFF24262A) else Color(0xFF282C37)) else Color(0xFFD9D5CB)
 val WkText: Color get() = if (darkMode) Color(0xFFECE8DF) else Color(0xFF16150F)
 val WkMuted: Color get() = if (darkMode) Color(0xFF8E8C85) else Color(0xFF6A675E)
 val WkRed: Color get() = if (darkMode) Color(0xFFFF5A4F) else Color(0xFFC62D22)
