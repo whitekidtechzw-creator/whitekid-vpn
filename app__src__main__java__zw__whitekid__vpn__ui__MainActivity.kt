@@ -120,8 +120,8 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
     val profiles = remember { mutableStateListOf<Profile>().apply { addAll(Store.profiles()) } }
     var selected by remember { mutableStateOf(Store.selectedId) }
     var tab by remember { mutableIntStateOf(0) }
+    val ui = remember { ServerUi(profiles, incoming, { selected = it; Store.selectedId = it }, { Store.saveProfiles(profiles.toList()) }) }
     val status by VpnState.status.collectAsState()
-    LaunchedEffect(incoming.value) { if (incoming.value != null) tab = 1 }
     LaunchedEffect(Unit) {
         if (System.currentTimeMillis() - Store.lastLinkUpdate > 6 * 3_600_000L && profiles.any { it.sourceUrl.isNotBlank() }) {
             refreshLinks(profiles); Store.saveProfiles(profiles.toList())
@@ -132,6 +132,7 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
     LaunchedEffect(Unit) { if (Build.VERSION.SDK_INT >= 33) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS) }
 
     val current = profiles.firstOrNull { it.id == selected } ?: profiles.firstOrNull()
+    ui.selectedId = current?.id ?: ""
     val scope = rememberCoroutineScope()
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val haptic = LocalHapticFeedback.current
@@ -155,7 +156,7 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
         if (i != null) { pending = p; vpnConsent.launch(i) } else VpnController.connect(ctx, p)
     }
     fun quickConnect() {
-        if (profiles.isEmpty()) { tab = 1; return }
+        if (profiles.isEmpty()) { ui.add = true; return }
         if (status == Status.CONNECTED || status == Status.CONNECTING) {
             Toast.makeText(ctx, "Disconnect first, then use Quick connect.", Toast.LENGTH_SHORT).show(); return
         }
@@ -175,7 +176,7 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
             if (Store.confirmDisconnect && status == Status.CONNECTED) askStop = true else VpnController.disconnect(ctx)
             return
         }
-        if (current == null) { tab = 1; return }
+        if (current == null) { ui.add = true; return }
         if (Store.autoPick) { quickConnect(); return }
         startConnect(current)
     }
@@ -226,7 +227,7 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
         scope.launch { drawer.close() }
         when (k) {
             "quick" -> quickConnect()
-            "servers" -> tab = 1
+            "servers" -> ui.add = true
             "tools" -> tab = 2
             "about" -> tab = 3
             "telegram", "support" -> open(ctx, TELEGRAM)
@@ -248,6 +249,7 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
                     onBell = { dlg = "update" },
                     onDoctor = { dlg = "doctor" },
                     onQuick = { k -> if (k == "quick") quickConnect() else dlg = k },
+                    ui = ui,
                     onGroup = { g -> group = g; Store.group = g },
                     onPick = { k ->
                         if (k == "auto") Store.autoPick = true
@@ -262,13 +264,9 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
                             if (status == Status.CONNECTED || status == Status.CONNECTING) Toast.makeText(ctx, "Disconnect first, then connect to the new SSL server.", Toast.LENGTH_LONG).show()
                             else startConnect(np)
                         }
-                    }) { tab = 1 }
+                    }) { ui.add = true }
+            ServerDialogs(ui)
             when (tab) {
-                1 -> PopupScreen("Servers", { tab = 0 }) {
-                    ServersScreen(profiles, current?.id ?: "", incoming, onSelect = { selected = it; Store.selectedId = it }) {
-                        Store.saveProfiles(profiles.toList())
-                    }
-                }
                 2 -> PopupScreen("Tools", { tab = 0 }) { ToolsScreen(profiles, exit) }
                 3 -> PopupScreen("About", { tab = 0 }) { AboutScreen() }
             }
@@ -350,6 +348,7 @@ fun HomeScreen(
     onToggle: () -> Unit, onMenu: () -> Unit, onBell: () -> Unit, onDoctor: () -> Unit, onGroup: (String) -> Unit, onPick: (String) -> Unit,
     onSsl: (Profile, Boolean) -> Unit,
     onQuick: (String) -> Unit,
+    ui: ServerUi,
     openServers: () -> Unit
 ) {
     val ctx = LocalContext.current
@@ -486,7 +485,7 @@ fun HomeScreen(
         L3Insights(status, p, ping, rx, tx, secs, graph, okN, badN)
 
         // ---- servers (v1.14: now right on the Connect screen)
-        ServerDeck(profiles, group, p?.id, Store.autoPick, status, onPick = onPick, onManage = openServers)
+        ServerDeck(ui, group, p?.id, Store.autoPick, status, onPick)
 
         // ---- live details
         if (on) {
@@ -781,27 +780,21 @@ fun Profile.expiryText(): String? {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun ServersScreen(list: MutableList<Profile>, selected: String, incoming: MutableState<String?>,
-                  onSelect: (String) -> Unit, persist: () -> Unit) {
-    val ctx = LocalContext.current
-    var addDialog by remember { mutableStateOf(false) }
-    var createDialog by remember { mutableStateOf(false) }
-    var tweakDialog by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val pings = remember { mutableStateMapOf<String, Int>() }
-    var pinging by remember { mutableStateOf(false) }
-    var busyWarp by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
-    var sortMode by remember { mutableIntStateOf(0) }
-    var favs by remember { mutableStateOf(Store.favorites) }
-    var actionFor by remember { mutableStateOf<Profile?>(null) }
-    var renameFor by remember { mutableStateOf<Profile?>(null) }
-    var qrText by remember { mutableStateOf<String?>(null) }
-    var protoFilter by remember { mutableStateOf("All") }
-    var onlyFavs by remember { mutableStateOf(false) }
-    var undo by remember { mutableStateOf<List<Pair<Int, Profile>>>(emptyList()) }
+/** Everything the Connect screen needs to manage servers (the old full Servers screen is gone). */
+class ServerUi(
+    val list: MutableList<Profile>,
+    val incoming: MutableState<String?>,
+    val select: (String) -> Unit,
+    val persist: () -> Unit
+) {
+    var selectedId: String = ""
+    var add by mutableStateOf(false)
+    var create by mutableStateOf(false)
+    var tweak by mutableStateOf(false)
+    var actionFor by mutableStateOf<Profile?>(null)
+    var renameFor by mutableStateOf<Profile?>(null)
+    var qrText by mutableStateOf<String?>(null)
+    var undo by mutableStateOf<List<Pair<Int, Profile>>>(emptyList())
 
     fun removeWithUndo(victims: List<Profile>) {
         if (victims.isEmpty()) return
@@ -809,192 +802,106 @@ fun ServersScreen(list: MutableList<Profile>, selected: String, incoming: Mutabl
         list.removeAll { x -> victims.any { it.id == x.id } }
         persist()
     }
-    LaunchedEffect(undo) { if (undo.isNotEmpty()) { delay(7000); undo = emptyList() } }
+}
 
-    fun addWarp() {
-        if (busyWarp) return
-        busyWarp = true
-        scope.launch {
-            val r = withContext(Dispatchers.IO) { runCatching { Warp.create() } }
-            busyWarp = false
-            r.onSuccess { w ->
-                list.add(w); persist(); onSelect(w.id); AppLog.log("Added Cloudflare WARP")
-                Toast.makeText(ctx, "WARP added. Go to Connect and tap the power button.", Toast.LENGTH_LONG).show()
-            }
-            r.onFailure { e ->
-                AppLog.log("ERROR: WARP setup failed: ${e.message}")
-                Toast.makeText(ctx, "Couldn't create a WARP account (${e.message}). It may be blocked on your network.", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    fun pingAll(pick: Boolean) {
-        if (pinging) return
-        pinging = true
-        scope.launch {
-            val res = list.toList().map { p -> async(Dispatchers.IO) { p.id to Pinger.tcp(p) } }.awaitAll()
-            res.forEach { (id, ms) -> pings[id] = ms }
-            if (pick) {
-                val best = list.filter { !it.expired() && (pings[it.id] ?: -1) >= 0 }.minByOrNull { pings[it.id] ?: Int.MAX_VALUE }
-                if (best != null) { onSelect(best.id); AppLog.log("Auto select: ${best.name} (${pings[best.id]} ms)") }
-                else AppLog.log("Auto select: no reachable server")
-            }
-            pinging = false
-        }
-    }
-
-    LaunchedEffect(list.size) { if (list.isNotEmpty()) pingAll(false) }
-    Box(Modifier.fillMaxSize()) {
-        Column(Modifier.padding(22.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("SERVERS", fontSize = 26.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
-                    Text("VLESS • VMess • Trojan • Shadowsocks • WireGuard • SSH • SlowDNS", color = WkMuted, fontSize = 12.sp)
-                }
-                OutlinedButton(onClick = { createDialog = true }) {
-                    Icon(Icons.Default.Share, null); Spacer(Modifier.width(6.dp)); Text("Create file")
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { pingAll(false) }, enabled = !pinging && list.isNotEmpty()) { Text(if (pinging) "Testing…" else "Ping all") }
-                OutlinedButton(onClick = { pingAll(true) }, enabled = !pinging && list.isNotEmpty()) { Text("Auto select") }
-                OutlinedButton(onClick = { addWarp() }, enabled = !busyWarp) { Text(if (busyWarp) "Creating…" else "+ Free WARP") }
-                val expiredList = list.filter { it.expired() }
-                if (expiredList.isNotEmpty()) OutlinedButton(onClick = { removeWithUndo(expiredList) }) { Text("Remove expired (${expiredList.size})") }
-                val dupVictims = l3DupeVictims(list)
-                if (dupVictims.isNotEmpty()) OutlinedButton(onClick = { removeWithUndo(dupVictims) }) { Text("Remove duplicates (${dupVictims.size})") }
-                val deadList = l4DeadServers(list, pings)
-                if (deadList.isNotEmpty()) OutlinedButton(onClick = { removeWithUndo(deadList) }) { Text("Remove unreachable (${deadList.size})") }
-                OutlinedButton(onClick = {
-                    val r = l4Random(list, pings)
-                    if (r != null) { onSelect(r.id); Toast.makeText(ctx, "Selected ${r.name}", Toast.LENGTH_SHORT).show() }
-                    else Toast.makeText(ctx, "Run Ping all first", Toast.LENGTH_SHORT).show()
-                }, enabled = list.isNotEmpty()) { Text("Random") }
-                L4PasteButton { incoming.value = it }
-                L4BackupButtons(list)
-                if (list.any { it.sourceUrl.isNotBlank() }) OutlinedButton(onClick = {
-                    scope.launch {
-                        val oldName = list.firstOrNull { it.id == selected }?.name
-                        val n = refreshLinks(list); persist()
-                        list.firstOrNull { it.name == oldName }?.let { onSelect(it.id) }
-                        Toast.makeText(ctx, if (n > 0) "Updated $n server(s)" else "Couldn't update. Check your internet.", Toast.LENGTH_LONG).show()
-                    }
-                }) { Text("Update links") }
-            }
-            if (list.isNotEmpty()) {
-                val reach = list.count { (pings[it.id] ?: -1) >= 0 }
-                val fastest = list.mapNotNull { x -> pings[x.id]?.takeIf { it >= 0 }?.let { x.name to it } }.minByOrNull { it.second }
-                Text("${list.size} servers  •  $reach reachable" + (fastest?.let { "  •  fastest ${it.first} ${it.second} ms" } ?: ""),
-                    color = WkMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 1, modifier = Modifier.padding(top = 8.dp))
-                L4ListFacts(list, pings)
-            }
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
-                placeholder = { Text("Search servers") }, leadingIcon = { Icon(Icons.Default.Search, null) })
-            val protos = list.map { it.proto.label }.distinct()
-            val pf = if (protoFilter != "All" && protoFilter !in protos) "All" else protoFilter
-            if (list.size > 1) Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Show", color = WkMuted, fontSize = 12.sp)
-                FilterChip(selected = onlyFavs, onClick = { onlyFavs = !onlyFavs }, label = { Text("★ Favourites") })
-                FilterChip(selected = pf == "All", onClick = { protoFilter = "All" }, label = { Text("All") })
-                if (protos.size > 1) protos.forEach { l -> FilterChip(selected = pf == l, onClick = { protoFilter = l }, label = { Text(l) }) }
-            }
-            Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Sort", color = WkMuted, fontSize = 12.sp)
-                listOf("Added", "Name", "Ping", "Expiry", "Reliable", "Group", "Used").forEachIndexed { i, l -> FilterChip(selected = sortMode == i, onClick = { sortMode = i }, label = { Text(l) }) }
-            }
-            val shown = list.filter { (query.isBlank() || it.name.contains(query, true) || it.proto.label.contains(query, true)) &&
-                    (!onlyFavs || it.id in favs) && (pf == "All" || it.proto.label == pf) }
-                .sortedWith(compareByDescending<Profile> { it.id in favs }.thenBy {
-                    when (sortMode) {
-                        1 -> it.name.lowercase()
-                        2 -> (pings[it.id]?.takeIf { ms -> ms >= 0 } ?: Int.MAX_VALUE).toString().padStart(10, '0')
-                        3 -> if (it.expires > 0) it.expires.toString().padStart(15, '0') else "9".repeat(15)
-                        4 -> (100 - (Store.reliability(it.id) ?: -1)).toString().padStart(4, '0')
-                        5 -> it.groupName().lowercase()
-                        6 -> (Long.MAX_VALUE - Store.usedBytes(it.id)).toString().padStart(20, '0')
-                        else -> ""
-                    }
-                })
-            Spacer(Modifier.height(8.dp))
-            if (list.isEmpty()) Text("Nothing here yet. Tap + and paste a vless://, vmess://, trojan://, ssh://, slowdns:// link, a WireGuard config, or a shared file code.", color = WkMuted)
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                items(shown, key = { it.id }) { p ->
-                    val exp = p.expiryText()
-                    val sel = p.id == selected
-                    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).combinedClickable(onClick = { onSelect(p.id) }, onLongClick = { actionFor = p }),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.width(3.dp).fillMaxHeight().background(if (sel) WkMint else Color.Transparent))
-                        Column(Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(p.proto.label.uppercase(), fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = WkMint, letterSpacing = 1.sp)
-                                Spacer(Modifier.width(8.dp))
-                                Text(p.name, maxLines = 1, fontWeight = FontWeight.SemiBold)
-                            }
-                            Text(p.detail() + (Store.reliability(p.id)?.let { "  •  $it% reliable" } ?: ""), color = WkMuted, fontSize = 12.sp, maxLines = 1)
-                            if (exp != null) Text(exp, color = when { exp == "Expired" -> WkRed; p.expires - Clock.now() < 259_200_000L -> WkViolet; else -> WkMint }, fontSize = 11.sp)
-                            if (p.dataLimitMb > 0) {
-                                Text("Data ${Store.usedBytes(p.id) / 1_000_000} / ${p.dataLimitMb} MB", color = WkMuted, fontSize = 11.sp)
-                                L3DataBar(Store.usedBytes(p.id), p.dataLimitMb)
-                            }
-                            L4UsedLine(p)
-                            if (p.note.isNotBlank()) Text(p.note, color = WkMuted, fontSize = 11.sp, maxLines = 2)
-                        }
-                        pings[p.id]?.let { ms ->
-                            Text(when { ms >= 0 -> "$ms ms"; ms == -1 -> "timeout"; else -> "—" },
-                                color = WkMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.clickable { scope.launch { pings[p.id] = withContext(Dispatchers.IO) { Pinger.tcp(p) } } }
-                                    .padding(start = 6.dp, end = 6.dp, top = 10.dp, bottom = 10.dp))
-                        }
-                        SignalBars(pings[p.id])
-                        IconButton(onClick = { favs = if (p.id in favs) favs - p.id else favs + p.id; Store.favorites = favs }) {
-                            Icon(Icons.Default.Star, "Favourite", tint = if (p.id in favs) WkMint else WkLine)
-                        }
-                        IconButton(onClick = { removeWithUndo(listOf(p)) }) { Icon(Icons.Default.Delete, "Delete", tint = WkMuted) }
-                    }
-                    HorizontalDivider(color = WkLine)
-                }
-            }
-        }
-        FloatingActionButton(onClick = { addDialog = true }, containerColor = WkMint, contentColor = WkBg,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp)) { Icon(Icons.Default.Add, "Add") }
-        if (undo.isNotEmpty()) L3UndoBar(undo.size, Modifier.align(Alignment.BottomStart).padding(start = 20.dp, bottom = 24.dp)) {
-            undo.forEach { (i, x) -> list.add(i.coerceIn(0, list.size), x) }
-            persist(); undo = emptyList()
-        }
-    }
-    if (addDialog || incoming.value != null) {
-        ImportDialog(incoming.value ?: "", onClose = { addDialog = false; incoming.value = null },
-            onManual = { addDialog = false; incoming.value = null; tweakDialog = true }) { found, msg ->
-            list.addAll(found); persist()
+/** The Add server dialog (paste / import file / create tweak) and the dialogs behind each server card's menu. */
+@Composable
+fun ServerDialogs(ui: ServerUi) {
+    val ctx = LocalContext.current
+    val list = ui.list
+    LaunchedEffect(ui.undo) { if (ui.undo.isNotEmpty()) { delay(7000); ui.undo = emptyList() } }
+    if (ui.add || ui.incoming.value != null) {
+        ImportDialog(ui.incoming.value ?: "", onClose = { ui.add = false; ui.incoming.value = null },
+            onManual = { ui.add = false; ui.incoming.value = null; ui.tweak = true }) { found, msg ->
+            list.addAll(found); ui.persist()
             AppLog.log("Imported ${found.size} server(s)")
-            if (found.isNotEmpty()) onSelect(found.first().id)
+            if (found.isNotEmpty()) ui.select(found.first().id)
             Toast.makeText(ctx, "Imported ${found.size} server(s)" + if (msg.isNotBlank()) "\n$msg" else "", Toast.LENGTH_LONG).show()
-            addDialog = false; incoming.value = null
+            ui.add = false; ui.incoming.value = null
         }
     }
-    if (createDialog) CreateFileDialog(list) { createDialog = false }
-    if (tweakDialog) AddTweakDialog(onClose = { tweakDialog = false }) { np ->
-        list.add(np); persist(); onSelect(np.id); AppLog.log("Added tweak: ${np.name}")
-        Toast.makeText(ctx, "Tweak saved.", Toast.LENGTH_SHORT).show(); tweakDialog = false
+    if (ui.create) CreateFileDialog(list) { ui.create = false }
+    if (ui.tweak) AddTweakDialog(onClose = { ui.tweak = false }) { np ->
+        list.add(np); ui.persist(); ui.select(np.id); AppLog.log("Added tweak: ${np.name}")
+        Toast.makeText(ctx, "Tweak saved.", Toast.LENGTH_SHORT).show(); ui.tweak = false
     }
-    actionFor?.let { p ->
-        ServerActionsDialog(p, onClose = { actionFor = null },
-            onRename = { renameFor = p },
-            onDuplicate = { list.add(p.copy(id = UUID.randomUUID().toString(), name = p.name + " copy")); persist() },
+    ui.actionFor?.let { p ->
+        ServerActionsDialog(p, onClose = { ui.actionFor = null },
+            onRename = { ui.renameFor = p },
+            onDuplicate = { list.add(p.copy(id = UUID.randomUUID().toString(), name = p.name + " copy")); ui.persist() },
             onCopy = { copyCode(ctx, WkFile.encode(listOf(p), 0L, "", false, null)) },
-            onQr = { qrText = WkFile.encode(listOf(p), 0L, "", false, null) },
-            onResetUsage = { Store.resetUsed(p.id); persist() },
-            onDelete = { removeWithUndo(listOf(p)) })
+            onQr = { ui.qrText = WkFile.encode(listOf(p), 0L, "", false, null) },
+            onResetUsage = { Store.resetUsed(p.id); ui.persist() },
+            onDelete = { ui.removeWithUndo(listOf(p)) })
     }
-    renameFor?.let { p ->
-        RenameDialog(p, onClose = { renameFor = null }) { n ->
+    ui.renameFor?.let { p ->
+        RenameDialog(p, onClose = { ui.renameFor = null }) { n ->
             val i = list.indexOfFirst { it.id == p.id }
-            if (i >= 0) { list[i] = p.copy(name = n); persist() }
+            if (i >= 0) { list[i] = p.copy(name = n); ui.persist() }
         }
     }
-    qrText?.let { QrDialog(it) { qrText = null } }
+    ui.qrText?.let { QrDialog(it) { ui.qrText = null } }
+    if (ui.undo.isNotEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomStart) {
+        L3UndoBar(ui.undo.size, Modifier.padding(start = 20.dp, bottom = 24.dp)) {
+            ui.undo.forEach { (i, x) -> list.add(i.coerceIn(0, list.size), x) }
+            ui.persist(); ui.undo = emptyList()
+        }
+    }
+}
+
+/** Housekeeping chips under the server cards: fastest, WARP, clean-ups, paste, backup, share file, refresh links. */
+@Composable
+fun ServerTools(ui: ServerUi, pings: Map<String, Int>) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busyWarp by remember { mutableStateOf(false) }
+    val list = ui.list
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = {
+            val best = list.filter { !it.expired() && (pings[it.id] ?: -1) >= 0 }.minByOrNull { pings[it.id] ?: Int.MAX_VALUE }
+            if (best != null) { ui.select(best.id); Toast.makeText(ctx, "Selected ${best.name} (${pings[best.id]} ms)", Toast.LENGTH_SHORT).show() }
+            else Toast.makeText(ctx, "No reachable server yet. Tap Ping first.", Toast.LENGTH_SHORT).show()
+        }, enabled = list.isNotEmpty()) { Text("Select fastest") }
+        OutlinedButton(onClick = {
+            if (!busyWarp) {
+                busyWarp = true
+                scope.launch {
+                    val r = withContext(Dispatchers.IO) { runCatching { Warp.create() } }
+                    busyWarp = false
+                    r.onSuccess { w ->
+                        list.add(w); ui.persist(); ui.select(w.id); AppLog.log("Added Cloudflare WARP")
+                        Toast.makeText(ctx, "WARP added. Tap the power button to connect.", Toast.LENGTH_LONG).show()
+                    }
+                    r.onFailure { e ->
+                        AppLog.log("ERROR: WARP setup failed: ${e.message}")
+                        Toast.makeText(ctx, "Couldn't create a WARP account (${e.message}). It may be blocked on your network.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }, enabled = !busyWarp) { Text(if (busyWarp) "Creating…" else "+ Free WARP") }
+        val expiredList = list.filter { it.expired() }
+        if (expiredList.isNotEmpty()) OutlinedButton(onClick = { ui.removeWithUndo(expiredList) }) { Text("Remove expired (${expiredList.size})") }
+        val dupVictims = l3DupeVictims(list)
+        if (dupVictims.isNotEmpty()) OutlinedButton(onClick = { ui.removeWithUndo(dupVictims) }) { Text("Remove duplicates (${dupVictims.size})") }
+        val deadList = l4DeadServers(list, pings)
+        if (deadList.isNotEmpty()) OutlinedButton(onClick = { ui.removeWithUndo(deadList) }) { Text("Remove unreachable (${deadList.size})") }
+        OutlinedButton(onClick = {
+            val r = l4Random(list, pings)
+            if (r != null) { ui.select(r.id); Toast.makeText(ctx, "Selected ${r.name}", Toast.LENGTH_SHORT).show() }
+            else Toast.makeText(ctx, "Tap Ping first", Toast.LENGTH_SHORT).show()
+        }, enabled = list.isNotEmpty()) { Text("Random") }
+        L4PasteButton { ui.incoming.value = it }
+        L4BackupButtons(list)
+        OutlinedButton(onClick = { ui.create = true }, enabled = list.isNotEmpty()) { Text("Create file") }
+        if (list.any { it.sourceUrl.isNotBlank() }) OutlinedButton(onClick = {
+            scope.launch {
+                val oldName = list.firstOrNull { it.id == ui.selectedId }?.name
+                val n = refreshLinks(list); ui.persist()
+                list.firstOrNull { it.name == oldName }?.let { ui.select(it.id) }
+                Toast.makeText(ctx, if (n > 0) "Updated $n server(s)" else "Couldn't update. Check your internet.", Toast.LENGTH_LONG).show()
+            }
+        }) { Text("Update links") }
+    }
 }
 
 @Composable

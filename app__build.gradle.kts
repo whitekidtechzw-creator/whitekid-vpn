@@ -11,8 +11,8 @@ android {
         applicationId = "zw.whitekid.vpn"
         minSdk = 26
         targetSdk = 34
-        versionCode = 21
-        versionName = "2.0.0"
+        versionCode = 23
+        versionName = "2.0.2"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
         // Built-in SlowDNS server (GitHub secrets). Empty = no built-in server.
         buildConfigField("String", "SLOWDNS_NS", "\"${System.getenv("WK_SLOWDNS_NS") ?: ""}\"")

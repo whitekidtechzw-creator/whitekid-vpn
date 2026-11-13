@@ -95,7 +95,7 @@ class WhitekidVpnService : VpnService() {
                 val d = DnsttEngine(this, p); dnstt = d; d.start(attempt)
                 step("Logging in over SlowDNS…")
                 AppLog.log("SlowDNS: tunnel listening, logging in over SSH")
-                val e = SshEngine(p.copy(host = "127.0.0.1", port = DnsttEngine.PORT, sni = "", proxy = "")) { true }; ssh = e; e.start()
+                val e = SshEngine(p.copy(host = "127.0.0.1", port = d.port, sni = "", proxy = "")) { true }; ssh = e; e.start()
                 AppLog.log("SSH: session up")
             }
             else -> if (!DnsResolve.isIp(p.host)) step("Resolving server…")

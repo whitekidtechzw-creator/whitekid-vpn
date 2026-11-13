@@ -39,21 +39,29 @@ import zw.whitekid.vpn.data.Store
 import zw.whitekid.vpn.vpn.Pinger
 import zw.whitekid.vpn.vpn.Status
 
+private val SORT_NAMES = listOf("Added", "Name", "Ping", "Expiry", "Reliable", "Group", "Used")
+
 /**
- * v1.14.0: servers live on the Connect screen. Cards for every server of the chosen network: tap one to select it,
- * ping chips refresh by themselves, "MANAGE" opens the full server manager (import, sort, backup, ...).
+ * Servers live on the Connect screen. Cards for every server of the chosen network: tap to select, long-press (or the ⋮ button)
+ * for rename / duplicate / share / QR / delete, ★ to favourite. ADD opens the Add server dialog; Tools has the housekeeping chips.
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun ServerDeck(
-    all: List<Profile>, group: String, selectedId: String?, autoPick: Boolean, status: Status,
-    onPick: (String) -> Unit, onManage: () -> Unit
-) {
+fun ServerDeck(ui: ServerUi, group: String, selectedId: String?, autoPick: Boolean, status: Status, onPick: (String) -> Unit) {
+    val all = ui.list
     val inGroup = all.filter { group == "All" || it.groupName() == group }
     val pings = remember { mutableStateMapOf<String, Int>() }
     var tick by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var showAll by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
+    var sortMode by remember { mutableIntStateOf(0) }
+    var sortMenu by remember { mutableStateOf(false) }
+    var more by remember { mutableStateOf(false) }
+    var onlyFavs by remember { mutableStateOf(false) }
+    var protoFilter by remember { mutableStateOf("All") }
+    var favs by remember { mutableStateOf(Store.favorites) }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val key = inGroup.joinToString(",") { it.id }
     LaunchedEffect(key, tick) {
         if (inGroup.isEmpty() || status == Status.CONNECTED || status == Status.CONNECTING) return@LaunchedEffect
@@ -62,16 +70,25 @@ fun ServerDeck(
         res.forEach { (id, ms) -> pings[id] = ms }
         busy = false
     }
-    val limit = 5
-    val favs = remember { mutableStateOf(Store.favorites) }
-    var fastFirst by remember { mutableStateOf(false) }
     val best = pings.filterValues { it >= 0 }.minByOrNull { it.value }?.key
-    val ordered = inGroup.sortedByDescending { it.id in favs.value }.let { l ->
-        if (fastFirst) l.sortedBy { pings[it.id]?.takeIf { m -> m >= 0 } ?: Int.MAX_VALUE } else l
-    }
-    val filtered = ordered.filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
+    val protos = inGroup.map { it.proto.label }.distinct()
+    val pf = if (protoFilter != "All" && protoFilter !in protos) "All" else protoFilter
+    val filtered = inGroup.filter {
+        (query.isBlank() || it.name.contains(query, true) || it.proto.label.contains(query, true)) &&
+            (!onlyFavs || it.id in favs) && (pf == "All" || it.proto.label == pf)
+    }.sortedWith(compareByDescending<Profile> { it.id in favs }.thenBy {
+        when (sortMode) {
+            1 -> it.name.lowercase()
+            2 -> (pings[it.id]?.takeIf { ms -> ms >= 0 } ?: Int.MAX_VALUE).toString().padStart(10, '0')
+            3 -> if (it.expires > 0) it.expires.toString().padStart(15, '0') else "9".repeat(15)
+            4 -> (100 - (Store.reliability(it.id) ?: -1)).toString().padStart(4, '0')
+            5 -> it.groupName().lowercase()
+            6 -> (Long.MAX_VALUE - Store.usedBytes(it.id)).toString().padStart(20, '0')
+            else -> ""
+        }
+    })
+    val limit = 5
     val shown = if (showAll || query.isNotBlank()) filtered else filtered.take(limit)
-    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     Spacer(Modifier.height(20.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -81,21 +98,18 @@ fun ServerDeck(
             Text("${inGroup.size}", color = WkMint, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
         }
         Spacer(Modifier.weight(1f))
-        val pad = PaddingValues(horizontal = 8.dp)
-        if (inGroup.size > 1) TextButton(onClick = { fastFirst = !fastFirst }, contentPadding = pad) {
-            Text(if (fastFirst) "⚡ FASTEST 1ST" else "↕ SORT", fontSize = 11.sp, letterSpacing = 1.sp, color = if (fastFirst) WkMint else WkMuted)
+        Button(onClick = { ui.add = true }, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = WkMint, contentColor = WkBg)) {
+            Text("+ ADD", fontWeight = FontWeight.Black, fontSize = 12.sp, letterSpacing = 1.sp)
         }
-        if (inGroup.isNotEmpty()) TextButton(onClick = { if (!busy) tick++ }, contentPadding = pad) {
-            Text(if (busy) "TESTING…" else "↻ PING", fontSize = 11.sp, letterSpacing = 1.sp, color = WkMuted)
-        }
-        TextButton(onClick = onManage, contentPadding = pad) { Text("MANAGE ›", fontSize = 11.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold) }
     }
+    Spacer(Modifier.height(6.dp))
     Box(Modifier.fillMaxWidth().height(1.dp).background(Brush.horizontalGradient(listOf(WkMint.copy(alpha = 0.7f), Color.Transparent))))
     Spacer(Modifier.height(10.dp))
 
     if (inGroup.isEmpty()) {
         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).border(1.dp, WkMint.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-            .background(WkMint.copy(alpha = 0.07f)).clickable(onClick = onManage).padding(18.dp)) {
+            .background(WkMint.copy(alpha = 0.07f)).clickable { ui.add = true }.padding(18.dp)) {
             Column {
                 Text("+  Add your first server", fontWeight = FontWeight.Bold, color = WkMint)
                 Text("Paste a link, import a .wkp file or add free WARP", color = WkMuted, fontSize = 12.sp)
@@ -104,43 +118,81 @@ fun ServerDeck(
         return
     }
 
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box {
+            AssistChip(onClick = { sortMenu = true }, label = { Text("↕ ${SORT_NAMES[sortMode]}", fontSize = 12.sp) })
+            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                SORT_NAMES.forEachIndexed { i, n -> DropdownMenuItem(text = { Text(n) }, onClick = { sortMode = i; sortMenu = false }) }
+            }
+        }
+        AssistChip(onClick = { if (!busy) tick++ }, label = { Text(if (busy) "Testing…" else "↻ Ping", fontSize = 12.sp) })
+        FilterChip(selected = onlyFavs, onClick = { onlyFavs = !onlyFavs }, label = { Text("★ Favourites", fontSize = 12.sp) })
+        if (protos.size > 1) {
+            FilterChip(selected = pf == "All", onClick = { protoFilter = "All" }, label = { Text("All", fontSize = 12.sp) })
+            protos.forEach { l -> FilterChip(selected = pf == l, onClick = { protoFilter = l }, label = { Text(l, fontSize = 12.sp) }) }
+        }
+        AssistChip(onClick = { more = !more }, label = { Text(if (more) "Tools ▴" else "Tools ▾", fontSize = 12.sp) })
+    }
+    if (more) { Spacer(Modifier.height(8.dp)); ServerTools(ui, pings) }
+    val reach = inGroup.count { (pings[it.id] ?: -1) >= 0 }
+    val fastest = inGroup.mapNotNull { x -> pings[x.id]?.takeIf { it >= 0 }?.let { x.name to it } }.minByOrNull { it.second }
+    Text("${inGroup.size} servers • $reach reachable" + (fastest?.let { " • fastest ${it.first} ${it.second} ms" } ?: ""),
+        color = WkMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 1, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
+    L4ListFacts(all, pings)
     if (inGroup.size > 6) {
         OutlinedTextField(value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("Search ${inGroup.size} servers", fontSize = 13.sp) }, shape = RoundedCornerShape(14.dp))
         Spacer(Modifier.height(8.dp))
     }
-    // AUTO card
+
     DeckCard(
         sel = autoPick, badge = "⚡", title = "Auto select", sub = "Always the fastest server, picked at connect",
-        ping = null, dim = false, tag = if (autoPick) "ON" else "", onClick = { onPick("auto") }, onLong = {}
+        ping = null, dim = false, tag = if (autoPick) "ON" else "", fav = null, onStar = {}, onMenu = null,
+        onClick = { onPick("auto") }, onLong = {}
     )
     shown.forEach { p ->
         Spacer(Modifier.height(8.dp))
         val ms = pings[p.id]
+        val isFav = p.id in favs
         DeckCard(
             sel = !autoPick && p.id == selectedId,
             badge = p.proto.label.take(2).uppercase(), title = p.name,
             sub = "${p.proto.label} • ${p.detail()}" + (p.expiryText()?.let { " • $it" } ?: "") + (Store.reliability(p.id)?.let { " • $it% ok" } ?: ""),
-            ping = ms, dim = p.expired(), tag = if (p.expired()) "EXPIRED" else if (p.id == best && inGroup.size > 1) "⚡ FASTEST" else if (p.id in favs.value) "★" else "",
-            onClick = { if (Store.haptics) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove); onPick(p.id) },
-            onLong = {
-                val n = if (p.id in favs.value) favs.value - p.id else favs.value + p.id
-                Store.favorites = n; favs.value = n
+            ping = ms, dim = p.expired(), tag = if (p.expired()) "EXPIRED" else if (p.id == best && inGroup.size > 1) "⚡ FASTEST" else "",
+            fav = isFav,
+            onStar = {
+                favs = if (isFav) favs - p.id else favs + p.id
+                Store.favorites = favs
                 if (Store.haptics) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            },
+            onMenu = { ui.actionFor = p },
+            onClick = { if (Store.haptics) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove); onPick(p.id) },
+            onLong = { if (Store.haptics) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); ui.actionFor = p },
+            extra = {
+                if (p.dataLimitMb > 0) {
+                    Text("Data ${Store.usedBytes(p.id) / 1_000_000} / ${p.dataLimitMb} MB", color = WkMuted, fontSize = 11.sp)
+                    L3DataBar(Store.usedBytes(p.id), p.dataLimitMb)
+                }
+                L4UsedLine(p)
+                if (p.note.isNotBlank()) Text(p.note, color = WkMuted, fontSize = 11.sp, maxLines = 2)
             }
         )
     }
-    if (query.isBlank() && inGroup.size > limit) {
+    if (query.isBlank() && filtered.size > limit) {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             TextButton(onClick = { showAll = !showAll }) {
-                Text(if (showAll) "SHOW LESS ▴" else "SHOW ALL ${inGroup.size} ▾", fontSize = 11.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
+                Text(if (showAll) "SHOW LESS ▴" else "SHOW ALL ${filtered.size} ▾", fontSize = 11.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
 }
 
 @Composable
-private fun DeckCard(sel: Boolean, badge: String, title: String, sub: String, ping: Int?, dim: Boolean, tag: String, onClick: () -> Unit, onLong: () -> Unit) {
+private fun DeckCard(
+    sel: Boolean, badge: String, title: String, sub: String, ping: Int?, dim: Boolean, tag: String,
+    fav: Boolean?, onStar: () -> Unit, onMenu: (() -> Unit)?, onClick: () -> Unit, onLong: () -> Unit,
+    extra: @Composable ColumnScope.() -> Unit = {}
+) {
     val a by animateFloatAsState(if (sel) 1f else 0f, tween(280), label = "deckSel")
     val clickNow by rememberUpdatedState(onClick)
     val longNow by rememberUpdatedState(onLong)
@@ -149,7 +201,7 @@ private fun DeckCard(sel: Boolean, badge: String, title: String, sub: String, pi
         Modifier.fillMaxWidth().alpha(if (dim) 0.5f else 1f).clip(shape)
             .background(Brush.horizontalGradient(listOf(lerp(WkCard, WkMint, 0.20f * a), lerp(WkCard, WkMint, 0.04f * a))))
             .border(if (sel) 1.5.dp else 1.dp, lerp(WkLine, WkMint, a), shape)
-            .pointerInput(Unit) { detectTapGestures(onTap = { clickNow() }, onLongPress = { longNow() }) }.padding(12.dp),
+            .pointerInput(Unit) { detectTapGestures(onTap = { clickNow() }, onLongPress = { longNow() }) }.padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(WkMint.copy(alpha = 0.12f + 0.2f * a)), contentAlignment = Alignment.Center) {
@@ -159,18 +211,23 @@ private fun DeckCard(sel: Boolean, badge: String, title: String, sub: String, pi
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, color = WkText)
             Text(sub, color = WkMuted, fontSize = 11.sp, maxLines = 1, fontFamily = FontFamily.Monospace)
+            extra()
         }
         if (tag.isNotEmpty()) {
             Text(tag, color = if (tag == "EXPIRED") WkRed else WkMint, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
-                modifier = Modifier.padding(end = 8.dp))
+                modifier = Modifier.padding(start = 6.dp, end = 4.dp))
         }
         if (ping != null) {
-            Column(horizontalAlignment = Alignment.End) {
+            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(horizontal = 4.dp)) {
                 SignalBars(ping)
                 Text(if (ping >= 0) "$ping ms" else "—", color = if (ping < 0) WkMuted else quality(ping, false).second,
                     fontSize = 10.sp, fontFamily = FontFamily.Monospace)
             }
         }
+        if (fav != null) Icon(Icons.Default.Star, "Favourite", tint = if (fav) WkMint else WkLine,
+            modifier = Modifier.size(36.dp).clip(CircleShape).clickable { onStar() }.padding(7.dp))
+        if (onMenu != null) Icon(Icons.Default.MoreVert, "More", tint = WkMuted,
+            modifier = Modifier.size(36.dp).clip(CircleShape).clickable { onMenu() }.padding(7.dp))
     }
 }
 
@@ -244,7 +301,7 @@ fun WkDrawer(version: String, status: Status, onItem: (String) -> Unit) {
             DrawerHead("EXPLORE")
             DrawerRow(Icons.Default.Settings, "Tools", "Split tunneling, DNS, labs", WkMint) { onItem("tools") }
             DrawerRow(Icons.Default.Info, "About", "Version, protocols, channel", WkViolet) { onItem("about") }
-            DrawerRow(Icons.Default.Menu, "Manage servers", "Import, sort, backup, share", Color(0xFF6CC4FF)) { onItem("servers") }
+            DrawerRow(Icons.Default.Add, "Add server", "Paste a link, import a file or create a tweak", Color(0xFF6CC4FF)) { onItem("servers") }
             DrawerRow(Icons.Default.Place, "IP Hunter", "My IP and location", Color(0xFFB7E34D)) { onItem("ip") }
             DrawerRow(Icons.Default.DateRange, "Insights", "Usage, streak and 7-day chart", WkMint) { onItem("insights") }
             DrawerRow(Icons.Default.Info, "History and stats", "Sessions and data used", WkOk) { onItem("history") }

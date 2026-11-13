@@ -75,6 +75,9 @@ class SshEngine(private val p: Profile, private val protect: (Socket) -> Boolean
         override fun getOutputStream(s: Socket): OutputStream = s.getOutputStream()
     }
 
+    private fun widen(key: String, extra: String): String =
+        ((JSch.getConfig(key) ?: "").split(",") + extra.split(",")).map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString(",")
+
     fun start() {
         val js = JSch()
         val s = js.getSession(p.user, p.host, p.port).apply {
@@ -84,6 +87,14 @@ class SshEngine(private val p: Profile, private val protect: (Socket) -> Boolean
             serverAliveInterval = 15000
             setServerAliveCountMax(6)
             setConfig("PreferredAuthentications", "password,keyboard-interactive")
+            // older SSH / Dropbear servers (common behind SlowDNS and SSL tunnels) only speak older algorithms: keep the modern ones
+            // first and append the old ones so the login never fails with "Algorithm negotiation fail"
+            setConfig("kex", widen("kex", "diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1,diffie-hellman-group1-sha1"))
+            setConfig("server_host_key", widen("server_host_key", "ssh-rsa,ssh-dss"))
+            setConfig("cipher.s2c", widen("cipher.s2c", "aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc"))
+            setConfig("cipher.c2s", widen("cipher.c2s", "aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc"))
+            setConfig("mac.s2c", widen("mac.s2c", "hmac-sha1,hmac-md5"))
+            setConfig("mac.c2s", widen("mac.c2s", "hmac-sha1,hmac-md5"))
             if (p.proto == Proto.SLOWDNS) {            // DNS tunnels are slow, so squeeze the data
                 setConfig("compression.s2c", "zlib@openssh.com,zlib,none")
                 setConfig("compression.c2s", "zlib@openssh.com,zlib,none")
