@@ -201,6 +201,11 @@ object Store {
         val k = "day_" + dayKey("yyyyMMdd")
         sp.edit().putLong(k, sp.getLong(k, 0L) + n).apply()
     }
+    /** data used n days ago (0 = today), from the same daily counters as usedToday() */
+    fun usedDaysAgo(n: Int): Long {
+        val c = java.util.Calendar.getInstance(); c.add(java.util.Calendar.DAY_OF_YEAR, -n)
+        return sp.getLong("day_" + SimpleDateFormat("yyyyMMdd", Locale.US).format(c.time), 0L)
+    }
     fun usedToday(): Long = sp.getLong("day_" + dayKey("yyyyMMdd"), 0L)
     fun usedMonth(): Long {
         val prefix = "day_" + dayKey("yyyyMM")

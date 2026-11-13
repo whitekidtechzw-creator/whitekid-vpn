@@ -22,6 +22,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -51,6 +53,7 @@ fun ServerDeck(
     var tick by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var showAll by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
     val key = inGroup.joinToString(",") { it.id }
     LaunchedEffect(key, tick) {
         if (inGroup.isEmpty() || status == Status.CONNECTED || status == Status.CONNECTING) return@LaunchedEffect
@@ -60,7 +63,15 @@ fun ServerDeck(
         busy = false
     }
     val limit = 5
-    val shown = if (showAll) inGroup else inGroup.take(limit)
+    val favs = remember { mutableStateOf(Store.favorites) }
+    var fastFirst by remember { mutableStateOf(false) }
+    val best = pings.filterValues { it >= 0 }.minByOrNull { it.value }?.key
+    val ordered = inGroup.sortedByDescending { it.id in favs.value }.let { l ->
+        if (fastFirst) l.sortedBy { pings[it.id]?.takeIf { m -> m >= 0 } ?: Int.MAX_VALUE } else l
+    }
+    val filtered = ordered.filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
+    val shown = if (showAll || query.isNotBlank()) filtered else filtered.take(limit)
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     Spacer(Modifier.height(20.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -70,10 +81,14 @@ fun ServerDeck(
             Text("${inGroup.size}", color = WkMint, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
         }
         Spacer(Modifier.weight(1f))
-        if (inGroup.isNotEmpty()) TextButton(onClick = { if (!busy) tick++ }) {
+        val pad = PaddingValues(horizontal = 8.dp)
+        if (inGroup.size > 1) TextButton(onClick = { fastFirst = !fastFirst }, contentPadding = pad) {
+            Text(if (fastFirst) "⚡ FASTEST 1ST" else "↕ SORT", fontSize = 11.sp, letterSpacing = 1.sp, color = if (fastFirst) WkMint else WkMuted)
+        }
+        if (inGroup.isNotEmpty()) TextButton(onClick = { if (!busy) tick++ }, contentPadding = pad) {
             Text(if (busy) "TESTING…" else "↻ PING", fontSize = 11.sp, letterSpacing = 1.sp, color = WkMuted)
         }
-        TextButton(onClick = onManage) { Text("MANAGE ›", fontSize = 11.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold) }
+        TextButton(onClick = onManage, contentPadding = pad) { Text("MANAGE ›", fontSize = 11.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold) }
     }
     Box(Modifier.fillMaxWidth().height(1.dp).background(Brush.horizontalGradient(listOf(WkMint.copy(alpha = 0.7f), Color.Transparent))))
     Spacer(Modifier.height(10.dp))
@@ -89,10 +104,15 @@ fun ServerDeck(
         return
     }
 
+    if (inGroup.size > 6) {
+        OutlinedTextField(value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("Search ${inGroup.size} servers", fontSize = 13.sp) }, shape = RoundedCornerShape(14.dp))
+        Spacer(Modifier.height(8.dp))
+    }
     // AUTO card
     DeckCard(
         sel = autoPick, badge = "⚡", title = "Auto select", sub = "Always the fastest server, picked at connect",
-        ping = null, dim = false, tag = if (autoPick) "ON" else "", onClick = { onPick("auto") }
+        ping = null, dim = false, tag = if (autoPick) "ON" else "", onClick = { onPick("auto") }, onLong = {}
     )
     shown.forEach { p ->
         Spacer(Modifier.height(8.dp))
@@ -100,12 +120,17 @@ fun ServerDeck(
         DeckCard(
             sel = !autoPick && p.id == selectedId,
             badge = p.proto.label.take(2).uppercase(), title = p.name,
-            sub = "${p.proto.label} • ${p.detail()}" + (p.expiryText()?.let { " • $it" } ?: ""),
-            ping = ms, dim = p.expired(), tag = if (p.expired()) "EXPIRED" else if (p.id in Store.favorites) "★" else "",
-            onClick = { onPick(p.id) }
+            sub = "${p.proto.label} • ${p.detail()}" + (p.expiryText()?.let { " • $it" } ?: "") + (Store.reliability(p.id)?.let { " • $it% ok" } ?: ""),
+            ping = ms, dim = p.expired(), tag = if (p.expired()) "EXPIRED" else if (p.id == best && inGroup.size > 1) "⚡ FASTEST" else if (p.id in favs.value) "★" else "",
+            onClick = { if (Store.haptics) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove); onPick(p.id) },
+            onLong = {
+                val n = if (p.id in favs.value) favs.value - p.id else favs.value + p.id
+                Store.favorites = n; favs.value = n
+                if (Store.haptics) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            }
         )
     }
-    if (inGroup.size > limit) {
+    if (query.isBlank() && inGroup.size > limit) {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             TextButton(onClick = { showAll = !showAll }) {
                 Text(if (showAll) "SHOW LESS ▴" else "SHOW ALL ${inGroup.size} ▾", fontSize = 11.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
@@ -115,14 +140,16 @@ fun ServerDeck(
 }
 
 @Composable
-private fun DeckCard(sel: Boolean, badge: String, title: String, sub: String, ping: Int?, dim: Boolean, tag: String, onClick: () -> Unit) {
+private fun DeckCard(sel: Boolean, badge: String, title: String, sub: String, ping: Int?, dim: Boolean, tag: String, onClick: () -> Unit, onLong: () -> Unit) {
     val a by animateFloatAsState(if (sel) 1f else 0f, tween(280), label = "deckSel")
+    val clickNow by rememberUpdatedState(onClick)
+    val longNow by rememberUpdatedState(onLong)
     val shape = RoundedCornerShape(16.dp)
     Row(
         Modifier.fillMaxWidth().alpha(if (dim) 0.5f else 1f).clip(shape)
             .background(Brush.horizontalGradient(listOf(lerp(WkCard, WkMint, 0.20f * a), lerp(WkCard, WkMint, 0.04f * a))))
             .border(if (sel) 1.5.dp else 1.dp, lerp(WkLine, WkMint, a), shape)
-            .clickable(onClick = onClick).padding(12.dp),
+            .pointerInput(Unit) { detectTapGestures(onTap = { clickNow() }, onLongPress = { longNow() }) }.padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(WkMint.copy(alpha = 0.12f + 0.2f * a)), contentAlignment = Alignment.Center) {
@@ -219,12 +246,13 @@ fun WkDrawer(version: String, status: Status, onItem: (String) -> Unit) {
             DrawerRow(Icons.Default.Info, "About", "Version, protocols, channel", WkViolet) { onItem("about") }
             DrawerRow(Icons.Default.Menu, "Manage servers", "Import, sort, backup, share", Color(0xFF6CC4FF)) { onItem("servers") }
             DrawerRow(Icons.Default.Place, "IP Hunter", "My IP and location", Color(0xFFB7E34D)) { onItem("ip") }
+            DrawerRow(Icons.Default.DateRange, "Insights", "Usage, streak and 7-day chart", WkMint) { onItem("insights") }
             DrawerRow(Icons.Default.Info, "History and stats", "Sessions and data used", WkOk) { onItem("history") }
 
             DrawerHead("CUSTOMISE")
             DrawerRow(Icons.Default.Edit, "Themes and appearance", "Accent, dark, AMOLED", Color(0xFFFF6F91)) { onItem("themes") }
             DrawerRow(Icons.Default.Refresh, "Check for update", "", WkViolet) { onItem("update") }
-            DrawerRow(Icons.Default.Check, "What's new", "", WkMint) { onItem("new") }
+            DrawerRow(Icons.Default.Check, "Welcome and updates", "Join our Telegram channel", WkMint) { onItem("new") }
             DrawerRow(Icons.Default.Info, "Help and FAQ", "", Color(0xFF6CC4FF)) { onItem("help") }
 
             DrawerHead("COMMUNITY")
@@ -345,4 +373,48 @@ fun InfoPill(a: Pair<String, String>, b: Pair<String, String>, c: Pair<String, S
             }
         }
     }
+}
+
+// ------------------------------------------------------------------ v1.14.3: popups like the IP Hunter card
+/** Servers, Tools and About open as a floating rounded card over the Connect screen, the same look as IP Hunter. */
+@Composable
+fun PopupScreen(title: String, onClose: () -> Unit, content: @Composable () -> Unit) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.88f),
+            shape = RoundedCornerShape(28.dp), color = WkBg, contentColor = WkText,
+            border = BorderStroke(1.dp, WkMint.copy(alpha = 0.55f))
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(title.uppercase(), color = WkMint, fontWeight = FontWeight.Black, fontSize = 13.sp, letterSpacing = 3.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onClose) { Text("Close", fontWeight = FontWeight.Bold) }
+                }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Brush.horizontalGradient(listOf(WkMint.copy(alpha = 0.8f), Color.Transparent))))
+                Box(Modifier.weight(1f).fillMaxWidth()) { content() }
+            }
+        }
+    }
+}
+
+/** Shown on first launch of each version (and from the side menu). No feature list: features live on Telegram. */
+@Composable
+fun WelcomeDialog(version: String, onClose: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    AlertDialog(
+        onDismissRequest = onClose, containerColor = WkCard, shape = RoundedCornerShape(28.dp),
+        title = { Text("Welcome to Whitekid VPN", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("VISION 2  •  v$version", color = WkMint, fontSize = 12.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
+                Text("Thanks for installing. If you are interested in the features and updates, join our Telegram channel, that is where everything is shared first.")
+                Text("t.me/whitekidtechzw", color = WkMint, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+            }
+        },
+        confirmButton = { Button(onClick = { open(ctx, TELEGRAM); onClose() }) { Text("Join Telegram") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("Maybe later") } }
+    )
 }

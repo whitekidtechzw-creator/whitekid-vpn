@@ -238,15 +238,16 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
     }
 
     ModalNavigationDrawer(drawerState = drawer, drawerContent = { WkDrawer(ver, status) { onDrawer(it) } }) {
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         containerColor = WkBg
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
-            when (tab) {
-                0 -> HomeScreen(current, status, profiles, group, newerVersion.isNotEmpty(), ::toggle,
+            HomeScreen(current, status, profiles, group, newerVersion.isNotEmpty(), ::toggle,
                     onMenu = { scope.launch { drawer.open() } },
                     onBell = { dlg = "update" },
                     onDoctor = { dlg = "doctor" },
+                    onQuick = { k -> if (k == "quick") quickConnect() else dlg = k },
                     onGroup = { g -> group = g; Store.group = g },
                     onPick = { k ->
                         if (k == "auto") Store.autoPick = true
@@ -262,15 +263,18 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
                             else startConnect(np)
                         }
                     }) { tab = 1 }
-                1 -> SubScreen({ tab = 0 }) {
+            when (tab) {
+                1 -> PopupScreen("Servers", { tab = 0 }) {
                     ServersScreen(profiles, current?.id ?: "", incoming, onSelect = { selected = it; Store.selectedId = it }) {
                         Store.saveProfiles(profiles.toList())
                     }
                 }
-                2 -> SubScreen({ tab = 0 }) { ToolsScreen(profiles, exit) }
-                else -> SubScreen({ tab = 0 }) { AboutScreen() }
+                2 -> PopupScreen("Tools", { tab = 0 }) { ToolsScreen(profiles, exit) }
+                3 -> PopupScreen("About", { tab = 0 }) { AboutScreen() }
             }
         }
+    }
+    SplashOverlay()
     }
     }
     when (dlg) {
@@ -281,6 +285,7 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
         "help" -> HelpDialog { dlg = "" }
         "licenses" -> LicensesDialog { dlg = "" }
         "doctor" -> DoctorDialog(current) { dlg = "" }
+        "insights" -> InsightsDialog { dlg = "" }
     }
     if (askStop) AlertDialog(
         onDismissRequest = { askStop = false }, containerColor = WkCard, title = { Text("Disconnect?") },
@@ -290,7 +295,7 @@ fun WkMain(incoming: MutableState<String?>, exit: () -> Unit) {
     passFor?.let { pf ->
         ProfilePassDialog(pf, onClose = { passFor = null }) { unlockedIds.add(pf.id); passFor = null; startConnect(pf) }
     }
-    if (showNew || dlg == "new") WhatsNewDialog(ver) { showNew = false; dlg = ""; Store.seenVersion = ver }
+    if (showNew || dlg == "new") WelcomeDialog(ver) { showNew = false; dlg = ""; Store.seenVersion = ver }
 }
 
 // ---------------------------------------------------------------- Home
@@ -344,6 +349,7 @@ fun HomeScreen(
     p: Profile?, status: Status, profiles: List<Profile>, group: String, hasNews: Boolean,
     onToggle: () -> Unit, onMenu: () -> Unit, onBell: () -> Unit, onDoctor: () -> Unit, onGroup: (String) -> Unit, onPick: (String) -> Unit,
     onSsl: (Profile, Boolean) -> Unit,
+    onQuick: (String) -> Unit,
     openServers: () -> Unit
 ) {
     val ctx = LocalContext.current
@@ -369,6 +375,10 @@ fun HomeScreen(
     val inGroup = profiles.filter { group == "All" || it.groupName() == group }
     val on = status == Status.CONNECTED
     L3ConnectTimerEffect(status)
+    LaunchedEffect(secs / 3600, on) {
+        val h = (secs / 3600).toInt()
+        if (on && h in listOf(1, 6, 12, 24)) Toast.makeText(ctx, "🔥 $h hour" + (if (h > 1) "s" else "") + " protected, keep going", Toast.LENGTH_SHORT).show()
+    }
     val (label, col) = when (status) {
         Status.CONNECTED -> "CONNECTED" to WkOk
         Status.CONNECTING -> "CONNECTING" to WkViolet
@@ -446,8 +456,11 @@ fun HomeScreen(
 
         // ---- dial
         Box(Modifier.fillMaxWidth().padding(top = 0.dp, bottom = 6.dp), contentAlignment = Alignment.Center) {
-            Dial(status, rxS + txS, onToggle)
+            Dial(status, rxS + txS, onToggle, onHold = { onQuick("quick") })
         }
+
+        QuickActions(onQuick)
+        Spacer(Modifier.height(10.dp))
 
         // ---- instrument readouts
         HorizontalDivider(color = WkLine)
@@ -611,7 +624,7 @@ fun quality(ms: Int, slow: Boolean): Pair<String, Color> {
  * connecting, a short arc circles the dial; failed, the ring turns red.
  */
 @Composable
-fun Dial(status: Status, speed: Long, onClick: () -> Unit) {
+fun Dial(status: Status, speed: Long, onClick: () -> Unit, onHold: () -> Unit = {}) {
     val inf = rememberInfiniteTransition(label = "dial")
     val spin by inf.animateFloat(0f, 360f, infiniteRepeatable(tween(1500, easing = LinearEasing)), label = "spin")
     val pulse by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(2600, easing = LinearEasing)), label = "pulse")
@@ -620,6 +633,16 @@ fun Dial(status: Status, speed: Long, onClick: () -> Unit) {
     val col = when (status) { Status.CONNECTED -> WkOk; Status.CONNECTING -> WkViolet; Status.ERROR -> WkRed; Status.IDLE -> WkMuted }
     val target = if (on) (Math.log10(speed.toDouble() + 10.0) / 7.0).coerceIn(0.05, 1.0).toFloat() * 270f else 0f
     val sweep by animateFloatAsState(target, tween(700), label = "sweep")
+    val burst = remember { Animatable(1f) }
+    val haptic = LocalHapticFeedback.current
+    LaunchedEffect(on) {
+        if (on) {
+            if (Store.haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            burst.snapTo(0f); burst.animateTo(1f, tween(1100, easing = FastOutSlowInEasing))
+        }
+    }
+    val clickNow by rememberUpdatedState(onClick)
+    val holdNow by rememberUpdatedState(onHold)
     var pressed by remember { mutableStateOf(false) }
     val press by animateFloatAsState(if (pressed) 0.94f else 1f, spring(dampingRatio = 0.45f, stiffness = 500f), label = "press")
     val track = WkLine
@@ -633,6 +656,18 @@ fun Dial(status: Status, speed: Long, onClick: () -> Unit) {
             val glowCol = if (status == Status.IDLE) ringCol else col
             drawCircle(Brush.radialGradient(listOf(glowCol.copy(alpha = 0.38f * strength), glowCol.copy(alpha = 0.10f * strength), Color.Transparent),
                 center = center, radius = r), r, center)
+            val bt = burst.value
+            if (bt < 1f) {
+                drawCircle(col.copy(alpha = (1f - bt) * 0.75f), dialR * (0.6f + 0.9f * bt), center, style = Stroke((6f * (1f - bt) + 1f).dp.toPx()))
+                for (k in 0 until 16) {
+                    val ang = k * (2.0 * Math.PI / 16)
+                    val a0 = dialR * (0.8f + 0.5f * bt); val a1 = a0 + 16.dp.toPx() * (1f - bt) + 2.dp.toPx()
+                    drawLine(col.copy(alpha = 1f - bt),
+                        Offset(center.x + (a0 * Math.cos(ang)).toFloat(), center.y + (a0 * Math.sin(ang)).toFloat()),
+                        Offset(center.x + (a1 * Math.cos(ang)).toFloat(), center.y + (a1 * Math.sin(ang)).toFloat()),
+                        3.dp.toPx(), StrokeCap.Round)
+                }
+            }
             if (on || status == Status.CONNECTING) {
                 for (k in 0..2) {
                     val t = (pulse + k / 3f) % 1f
@@ -641,7 +676,8 @@ fun Dial(status: Status, speed: Long, onClick: () -> Unit) {
             }
         }
         Box(Modifier.size(244.dp).scale(press).clip(CircleShape)
-            .pointerInput(Unit) { detectTapGestures(onPress = { pressed = true; tryAwaitRelease(); pressed = false }, onTap = { onClick() }) },
+            .pointerInput(Unit) { detectTapGestures(onPress = { pressed = true; tryAwaitRelease(); pressed = false }, onTap = { clickNow() },
+                onLongPress = { if (Store.haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress); holdNow() }) },
             contentAlignment = Alignment.Center) {
             Canvas(Modifier.fillMaxSize()) {
                 val r = size.minDimension / 2
@@ -675,6 +711,14 @@ fun Dial(status: Status, speed: Long, onClick: () -> Unit) {
                 drawArc(iconCol, -60f, 300f, false, Offset(c.x - pr, c.y - pr + 4), Size(pr * 2, pr * 2), style = Stroke(5.dp.toPx(), cap = StrokeCap.Round))
                 drawLine(iconCol, Offset(c.x, c.y - pr - 8), Offset(c.x, c.y - 2), 5.dp.toPx(), StrokeCap.Round)
             }
+            val hint = when (status) {
+                Status.CONNECTED -> "↓↑ " + rateText(speed)
+                Status.CONNECTING -> "CONNECTING…"
+                Status.ERROR -> "TAP TO RETRY"
+                Status.IDLE -> "TAP TO CONNECT"
+            }
+            Text(hint, color = if (status == Status.IDLE) WkMuted else col, fontSize = 11.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace, modifier = Modifier.align(Alignment.Center).offset(y = 66.dp))
         }
     }
 }
@@ -1406,8 +1450,7 @@ fun AboutScreen() {
         Spacer(Modifier.height(8.dp))
         Text("Version ${appVersion(ctx)} • by Whitekid Tech", color = WkMuted, fontSize = 12.sp)
         Spacer(Modifier.height(24.dp))
-        Text("Protocols: VLESS, VMess, Trojan, Shadowsocks, WireGuard, SSH and SlowDNS, with SNI, custom DNS, split tunneling, device-locked expiring config files, data limits and auto-reconnect.",
-            color = WkMuted, textAlign = TextAlign.Center)
+        Text("Want the features and updates? Join our Telegram channel.", color = WkMuted, textAlign = TextAlign.Center)
         Spacer(Modifier.height(24.dp))
         Button(onClick = { open(ctx, TELEGRAM) }) { Text("t.me/whitekidtechzw") }
     }

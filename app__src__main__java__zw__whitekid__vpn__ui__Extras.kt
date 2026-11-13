@@ -203,7 +203,24 @@ fun IpDialog(p: Profile?, connected: Boolean, onClose: () -> Unit) {
         }
         r.onFailure { msg = "Couldn't look up your IP (${it.message}). Check your internet." }
     }
-    InfoDialog("IP Hunter", onClose) { Text(msg) }
+    InfoDialog("IP Hunter", onClose) {
+        Text(msg)
+        val ipOnly = Regex("""IP: (\S+)""").find(msg)?.groupValues?.get(1)
+        if (ipOnly != null) {
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            Row {
+                TextButton(onClick = {
+                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("ip", ipOnly))
+                    android.widget.Toast.makeText(ctx, "IP copied", android.widget.Toast.LENGTH_SHORT).show()
+                }) { Text("Copy IP") }
+                TextButton(onClick = {
+                    ctx.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND)
+                        .setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, msg), "Share").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                }) { Text("Share") }
+            }
+        }
+    }
 }
 
 @Composable
