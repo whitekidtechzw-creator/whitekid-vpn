@@ -1,3 +1,10 @@
+# 🧩 Whitekid VPN 2.0.7: "SlowDNS for WhatsApp"
+
+- SlowDNS now carries WhatsApp only (unless Split tunnel is on): Huawei/background apps were opening dozens of connections and starving the tiny DNS tunnel
+- SlowDNS is no longer torn down by slow link tests: tests run every 45 s, 12 misses are needed, and connecting no longer waits 20 s
+
+---
+
 # 🧩 Whitekid VPN 2.0.6: "Build fix + SSH channel log"
 
 - Build: Kotlin compiler now runs inside Gradle (fixes "The daemon has terminated unexpectedly"), setup-java v5

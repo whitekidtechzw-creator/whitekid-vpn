@@ -101,6 +101,7 @@ class WhitekidVpnService : VpnService() {
             else -> if (!DnsResolve.isIp(p.host)) step("Resolving server…")
         }
 
+        waOnly = p.proto == Proto.SLOWDNS && !Store.splitEnabled
         step("Building tunnel…")
         AppLog.log("TUN: establishing (DNS ${dns.joinToString(",")})")
         // auto-heal: every retry changes the settings that most often break a tunnel (packet size, DNS mode, mux)
@@ -153,8 +154,16 @@ class WhitekidVpnService : VpnService() {
     }
 
     /** Which apps use the tunnel (split tunneling rules). Shared by the real tunnel and the kill-switch tunnel. */
+    @Volatile private var waOnly = false
+
     private fun applyApps(b: Builder) {
         var allowed = 0
+        // A DNS tunnel moves only a few KB/s. Phone services (Huawei, updates, push) open dozens of connections at once and
+        // starve it, so unless the user set up their own split tunnel, SlowDNS carries WhatsApp only.
+        if (waOnly) {
+            listOf("com.whatsapp", "com.whatsapp.w4b").forEach { if (runCatching { b.addAllowedApplication(it) }.isSuccess) allowed++ }
+            if (allowed > 0) { AppLog.log("SlowDNS: only WhatsApp uses the tunnel (turn on Split tunnel to choose other apps)"); return }
+        }
         if (Store.splitEnabled && Store.splitOnly) Store.bypassApps.forEach { if (runCatching { b.addAllowedApplication(it) }.isSuccess) allowed++ }
         if (allowed == 0) {
             b.addDisallowedApplication(packageName)
@@ -516,7 +525,7 @@ object VpnController {
         // the live monitor still catches a bad link. Other protocols have no login, so they need the traffic proof.
         val loginProved = slow || p.proto == Proto.SSH
         val tries = if (loginProved) 1 else 3
-        val timeout = if (slow) 20_000 else if (loginProved) 6_000 else 8_000
+        val timeout = if (slow) 8_000 else if (loginProved) 6_000 else 8_000
         var last = ""
         Thread.sleep(600)
         for (i in 1..tries) {
@@ -605,7 +614,7 @@ object VpnController {
      */
     private fun hold(app: Context, p: Profile, g: Int): String? {
         val slow = p.proto == Proto.SLOWDNS
-        val every = if (slow) 20_000L else 10_000L
+        val every = if (slow) 45_000L else 10_000L
         var net = NetInfo.netKey(app)
         var seen = NetWatcher.version
         var nextPing = System.currentTimeMillis() + every
@@ -641,7 +650,7 @@ object VpnController {
                     fails++
                     VpnState.recordPing(null)
                     AppLog.log("Link check failed ($fails): ${e.message}")
-                    val limit = if (afterChange) 2 else if (slow) 4 else 3
+                    val limit = if (afterChange) 2 else if (slow) 12 else 3   // a congested DNS tunnel must not be torn down by a slow test; a dead one is caught by engineAlive()
                     if (fails >= limit) return if (afterChange) "network changed" else "tunnel stopped responding"
                 }
                 nextPing = System.currentTimeMillis() + (if (fails > 0) 3_000L else every)
