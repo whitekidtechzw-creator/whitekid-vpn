@@ -128,16 +128,30 @@ class SshEngine(private val p: Profile, private val protect: (Socket) -> Boolean
             else -> return
         }
         val port = (i.read() shl 8) or i.read()
-        val ch = session!!.openChannel("direct-tcpip") as ChannelDirectTCPIP
-        ch.setHost(host); ch.setPort(port)
-        val chIn = ch.inputStream; val chOut = ch.outputStream
-        ch.connect(if (p.proto == Proto.SLOWDNS) 30000 else 10000)   // DNS tunnels need longer to open a channel
+        val t0 = System.currentTimeMillis()
+        val ch: ChannelDirectTCPIP
+        val chIn: InputStream; val chOut: OutputStream
+        try {
+            ch = session!!.openChannel("direct-tcpip") as ChannelDirectTCPIP
+            ch.setHost(host); ch.setPort(port)
+            chIn = ch.inputStream; chOut = ch.outputStream
+            ch.connect(if (p.proto == Proto.SLOWDNS) 30000 else 10000)   // DNS tunnels need longer to open a channel
+        } catch (e: Exception) {
+            note("SSH channel to $host:$port FAILED after ${System.currentTimeMillis() - t0} ms: ${e.message ?: e.javaClass.simpleName}")
+            o.write(byteArrayOf(5, 5, 0, 1, 0, 0, 0, 0, 0, 0)); o.flush()   // tell the core the connection was refused
+            return
+        }
+        note("SSH channel to $host:$port open in ${System.currentTimeMillis() - t0} ms")
         o.write(byteArrayOf(5, 0, 0, 1, 0, 0, 0, 0, 0, 0)); o.flush()
         val t = thread(isDaemon = true) { runCatching { chIn.copyTo(o) }; runCatching { c.close() } }
         runCatching { i.copyTo(chOut) }
         runCatching { ch.disconnect() }
         t.join(500)
     }
+
+    @Volatile private var noted = 0
+    /** the first 40 channel events go to the live log, so a server that refuses or stalls connections can be seen */
+    private fun note(msg: String) { if (noted++ < 40) zw.whitekid.vpn.data.AppLog.log(msg) }
 
     private fun readFully(i: InputStream, b: ByteArray) {
         var off = 0

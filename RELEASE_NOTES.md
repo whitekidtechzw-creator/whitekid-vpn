@@ -1,3 +1,10 @@
+# 🧩 Whitekid VPN 2.0.6: "Build fix + SSH channel log"
+
+- Build: Kotlin compiler now runs inside Gradle (fixes "The daemon has terminated unexpectedly"), setup-java v5
+- SlowDNS/SSH: the live log shows each connection the server opens or refuses, with the reason and time, so a blocked destination is visible
+
+---
+
 # 🧩 Whitekid VPN 2.0.5: "SlowDNS names resolve"
 
 - SlowDNS: the phone's names (WhatsApp, browsers) are now resolved by the phone's own resolver first, outside the slow tunnel, instead of through a server that may refuse port 53
