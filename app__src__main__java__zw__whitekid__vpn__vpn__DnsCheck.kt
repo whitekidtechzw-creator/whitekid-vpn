@@ -81,6 +81,8 @@ object DnsCheck {
                     refused = true; break      // the server forbids raw DNS ports: other resolvers won't help, go to the name test
                 } catch (e: Exception) {
                     AppLog.log("DNS check $ip (try $n): ${e.message ?: e.javaClass.simpleName}")
+                    // SSH / SlowDNS servers that slam port 53 shut at once forbid it: more raw tries only load the slow tunnel
+                    if ((slow || ssh) && e.message == "connection closed") { refused = true; break }
                     if (idx >= 2) break
                 }
             }

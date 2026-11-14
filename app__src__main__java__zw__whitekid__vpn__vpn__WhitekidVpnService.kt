@@ -555,7 +555,7 @@ object VpnController {
             val want = Store.dnsList().first()
             VpnState.dnsNote.value = "Checking DNS…"
             var note = ""
-            for (wait in longArrayOf(1500, 6000, 15000)) {
+            for (wait in (if (p.proto == Proto.SLOWDNS) longArrayOf(9000, 20000, 30000) else longArrayOf(1500, 6000, 15000))) {
                 Thread.sleep(wait)
                 if (!alive(g) || VpnState.status.value != Status.CONNECTED) return@thread
                 val r = DnsCheck.verify(p, Store.dnsList())
@@ -566,6 +566,7 @@ object VpnController {
             if (alive(g) && VpnState.status.value == Status.CONNECTED) VpnState.dnsNote.value = note
         }
         thread(name = "wk-after", isDaemon = true) {
+            if (p.proto == Proto.SLOWDNS) Thread.sleep(5000)     // let the first test finish before loading the slow tunnel further
             runCatching {
                 val c = HealthCheck.open(p, "https://ipinfo.io/json", if (p.proto == Proto.SLOWDNS) 20_000 else 8_000)
                 val body = try { c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }

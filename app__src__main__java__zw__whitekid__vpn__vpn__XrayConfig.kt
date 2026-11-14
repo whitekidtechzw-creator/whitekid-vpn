@@ -22,10 +22,14 @@ object XrayConfig {
                 DnsResolve.resolve(p.host, dns)?.let { hosts.put(p.host, it) }
                 put(JSONObject().put("address", "localhost").put("domains", JSONArray().put("full:${p.host}")))
             }
-            dns.forEach { put(dnsServer(it, heal)) }
+            val lean = p.proto == Proto.SLOWDNS      // a DNS tunnel carries ~100 bytes per round trip: no TLS handshakes, few resolvers
+            // SlowDNS: this app sits outside the VPN, so the phone's own resolver answers instantly and never has to cross the
+            // slow tunnel (or a server that refuses port 53). WhatsApp and every app need names to resolve first.
+            if (lean) put("localhost")
+            dns.take(if (lean) 1 else dns.size).forEach { put(dnsServer(it, heal, lean)) }
             // backup chain: if the chosen resolver stalls, the next ones answer instead of the lookup hanging
-            listOf("8.8.8.8", "1.1.1.1", "9.9.9.9").filter { it !in dns }.take(2).forEach { put("tcp://$it") }
-            put("localhost")
+            listOf("8.8.8.8", "1.1.1.1", "9.9.9.9").filter { it !in dns }.take(if (lean) 1 else 2).forEach { put("tcp://$it") }
+            if (!lean) put("localhost")
         }
         val outbound = if (p.proto == Proto.SSH || p.proto == Proto.SLOWDNS) sshOutbound() else proxyOutbound(p, heal)
         val sniff = JSONObject().put("enabled", true).put("destOverride", JSONArray().put("http").put("tls"))
@@ -58,7 +62,7 @@ object XrayConfig {
         "9.9.9.9" to "https://9.9.9.9/dns-query", "149.112.112.112" to "https://149.112.112.112/dns-query")
 
     /** Plain DNS over TCP, or DNS-over-HTTPS when Secure DNS is on and the resolver supports it. */
-    private fun dnsServer(ip: String, heal: Int): String = if (Store.doh && heal < 2) (DOH[ip] ?: "tcp://$ip") else "tcp://$ip"
+    private fun dnsServer(ip: String, heal: Int, lean: Boolean = false): String = if (Store.doh && heal < 2 && !lean) (DOH[ip] ?: "tcp://$ip") else "tcp://$ip"
 
     private fun sshOutbound() = JSONObject().put("protocol", "socks").put("settings",
         JSONObject().put("servers", JSONArray().put(JSONObject().put("address", "127.0.0.1").put("port", SSH_SOCKS))))

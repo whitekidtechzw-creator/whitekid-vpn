@@ -829,8 +829,8 @@ fun ServerDialogs(ui: ServerUi) {
         ServerActionsDialog(p, onClose = { ui.actionFor = null },
             onRename = { ui.renameFor = p },
             onDuplicate = { list.add(p.copy(id = UUID.randomUUID().toString(), name = p.name + " copy")); ui.persist() },
-            onCopy = { copyCode(ctx, WkFile.encode(listOf(p), 0L, "", false, null)) },
-            onQr = { ui.qrText = WkFile.encode(listOf(p), 0L, "", false, null) },
+            onCopy = { copyCode(ctx, WkFile.encode(listOf(p), 0L, p.note, false, null)) },
+            onQr = { ui.qrText = WkFile.encode(listOf(p), 0L, p.note, false, null) },
             onResetUsage = { Store.resetUsed(p.id); ui.persist() },
             onDelete = { ui.removeWithUndo(listOf(p)) })
     }

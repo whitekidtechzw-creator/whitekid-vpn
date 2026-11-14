@@ -106,9 +106,16 @@ object WkFile {
             val note = j.optString("note"); val author = j.optString("author", "Whitekid Tech")
             val arr = j.getJSONArray("profiles")
             val list = (0 until arr.length()).map {
-                Profile.fromJson(arr.getJSONObject(it)).copy(
-                    id = UUID.randomUUID().toString(), expires = exp, locked = locked, note = note, author = author,
-                    device = dev, dataLimitMb = dataMb)
+                val own = Profile.fromJson(arr.getJSONObject(it))
+                // file-level values win, but a server's own note, expiry, limit, lock and device survive a round trip
+                own.copy(
+                    id = UUID.randomUUID().toString(),
+                    expires = if (exp > 0) exp else own.expires,
+                    locked = locked || own.locked,
+                    note = note.ifBlank { own.note },
+                    author = author.ifBlank { own.author },
+                    device = dev.ifEmpty { own.device },
+                    dataLimitMb = if (dataMb > 0) dataMb else own.dataLimitMb)
             }
             ImportResult.Ok(list, note)
         } catch (_: Exception) { ImportResult.Fail("This file is damaged.") }

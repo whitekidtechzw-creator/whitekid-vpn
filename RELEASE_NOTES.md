@@ -1,4 +1,23 @@
-# 🧩 Whitekid VPN 2.0.2: "Servers on Connect + SlowDNS fixes"
+# 🧩 Whitekid VPN 2.0.5: "SlowDNS names resolve"
+
+- SlowDNS: the phone's names (WhatsApp, browsers) are now resolved by the phone's own resolver first, outside the slow tunnel, instead of through a server that may refuse port 53
+
+---
+
+# 🧩 Whitekid VPN 2.0.4: "SlowDNS stays up"
+
+- SlowDNS: a Disconnect during start-up no longer leaves a hidden dnstt process running (it fought the new one for the resolver and broke the tunnel); leftovers are killed on every start
+- SlowDNS: no DNS-over-HTTPS and fewer backup resolvers through the tunnel, DNS checks stop after the first instant refusal and wait for the first test, so the slow link is not flooded
+
+---
+
+# 🧩 Whitekid VPN 2.0.3: "Share code keeps the note"
+
+- Copy share code / QR now keeps the server's own note, and importing a code no longer wipes a server's note, expiry, data limit or lock when the file itself has none
+
+---
+
+# Whitekid VPN 2.0.2: "Servers on Connect + SlowDNS fixes"
 
 **Servers**
 - The full Servers screen is gone. Only the Add server dialog is kept (paste, import file, create tweak), opened with + ADD on the Connect screen, the + on the NETWORK card, or the side menu
@@ -13,7 +32,7 @@
 - The ISP's own DNS servers are now the last fallback after Google 8.8.8.8, 8.8.4.4, 1.1.1.1 and 9.9.9.9
 - When dnstt stops, its last message is shown in the error
 - SSH login also accepts older servers (older key exchange, host key, cipher and MAC) after the modern ones, which fixes "Algorithm negotiation fail" on old Dropbear / OpenSSH servers (also helps plain SSH and SSL profiles)
-- Version 2.0.2 (code 23)
+- Version 2.0.3 (code 24)
 
 ⚠️ Not compiled here. If the build complains, send me the first red line of the log.
 

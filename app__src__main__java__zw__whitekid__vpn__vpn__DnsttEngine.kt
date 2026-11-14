@@ -31,6 +31,15 @@ class DnsttEngine(private val ctx: Context, private val p: Profile) {
         val RESOLVERS = listOf("8.8.8.8", "8.8.4.4", "1.1.1.1", "9.9.9.9")
         private val HEX64 = Regex("^[0-9a-fA-F]{64}$")
 
+        /** every dnstt process ever started and not yet stopped: a leftover one (it kept hammering the resolver) is killed on the next start */
+        private val running = java.util.concurrent.ConcurrentLinkedQueue<Process>()
+        fun killAll() {
+            while (true) {
+                val pr = running.poll() ?: break
+                runCatching { pr.destroy(); if (!pr.waitFor(800, TimeUnit.MILLISECONDS)) pr.destroyForcibly() }
+            }
+        }
+
         /** dnstt wants the server key as 64 hex characters. Accepts stray spaces / new lines, a 0x prefix, or the base64 form. */
         fun normalizeKey(raw: String): String {
             val s = raw.trim().removePrefix("0x").filter { !it.isWhitespace() }
@@ -46,6 +55,7 @@ class DnsttEngine(private val ctx: Context, private val p: Profile) {
         private set
     @Volatile private var proc: Process? = null
     @Volatile private var lastLine = ""
+    @Volatile private var stopped = false
 
     /** false once the dnstt process has exited (the watchdog in VpnController then restarts everything) */
     fun isAlive(): Boolean {
@@ -72,18 +82,23 @@ class DnsttEngine(private val ctx: Context, private val p: Profile) {
         val key = normalizeKey(p.publicKey)
         val domain = p.host.trim().trim('.')
         if (domain.isEmpty() || DnsResolve.isIp(domain)) error("SlowDNS needs the nameserver domain (like ns.example.com), not an IP address")
+        killAll()
+        if (stopped) error("stopped")
         port = freePort()
         lastLine = ""
         val own = p.resolver.trim().takeIf { DnsResolve.isIp(it) && !it.contains(':') }
         val all = (listOfNotNull(own) + RESOLVERS + ispDns()).distinct()
         val up = DnsResolve.aliveList(all).ifEmpty { all }
+        if (stopped) error("stopped")      // Disconnect arrived while the resolvers were being probed: do not start a process nobody will stop
         val pick = up[attempt % up.size]
         AppLog.log("SlowDNS: resolver $pick (${up.size} of ${all.size} answering, try ${attempt + 1}), local port $port")
         val pb = ProcessBuilder(bin.absolutePath, "-udp", "$pick:53", "-pubkey", key, domain, "127.0.0.1:$port")
             .redirectErrorStream(true)
         if (p.locked) pb.redirectOutput(ProcessBuilder.Redirect.appendTo(File("/dev/null")))
         val pr = pb.start()
+        running.add(pr)
         proc = pr
+        if (stopped) { stop(); error("stopped") }
         if (!p.locked) thread(name = "dnstt-log", isDaemon = true) {
             runCatching { pr.inputStream.bufferedReader().forEachLine { if (it.isNotBlank()) lastLine = it; AppLog.log("dnstt: $it") } }
         }
@@ -103,8 +118,10 @@ class DnsttEngine(private val ctx: Context, private val p: Profile) {
     }
 
     fun stop() {
+        stopped = true
         val pr = proc; proc = null
         if (pr != null) runCatching {
+            running.remove(pr)
             pr.destroy()
             if (!pr.waitFor(1500, TimeUnit.MILLISECONDS)) pr.destroyForcibly()
         }
