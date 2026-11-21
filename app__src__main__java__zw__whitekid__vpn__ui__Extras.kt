@@ -478,6 +478,24 @@ fun AddTweakDialog(onClose: () -> Unit, onSave: (Profile) -> Unit) {
     var ns by remember { mutableStateOf("") }
     var key by remember { mutableStateOf("") }
     var link by remember { mutableStateOf("") }
+    // structured fields used by vless / vmess / trojan / ss / wg, like any other VPN app's manual-entry form
+    var vId by remember { mutableStateOf("") }        // uuid or ss password
+    var vSni by remember { mutableStateOf("") }
+    var vNet by remember { mutableStateOf("tcp") }    // tcp / ws / grpc
+    var vPath by remember { mutableStateOf("") }
+    var vTls by remember { mutableStateOf(true) }
+    var vFlow by remember { mutableStateOf(false) }   // vless xtls-rprx-vision
+    var vAid by remember { mutableStateOf("0") }       // vmess alterId
+    var vCipher by remember { mutableStateOf("aes-256-gcm") } // ss method
+    var vCipherMenu by remember { mutableStateOf(false) }
+    var vNetMenu by remember { mutableStateOf(false) }
+    var wgPriv by remember { mutableStateOf("") }
+    var wgAddr by remember { mutableStateOf("") }
+    var wgDns by remember { mutableStateOf("1.1.1.1") }
+    var wgPeerKey by remember { mutableStateOf("") }
+    var wgEndpoint by remember { mutableStateOf("") }
+    var wgAllowed by remember { mutableStateOf("0.0.0.0/0") }
+    var wgPsk by remember { mutableStateOf("") }
     var xExp by remember { mutableStateOf(false) }
     var days by remember { mutableStateOf("7") }
     var xHw by remember { mutableStateOf(false) }
@@ -491,11 +509,29 @@ fun AddTweakDialog(onClose: () -> Unit, onSave: (Profile) -> Unit) {
     fun enc(s: String) = java.net.URLEncoder.encode(s.trim(), "UTF-8")
     fun save() {
         if (name.isBlank()) { err = "Enter a tweak name."; return }
+        val netSuffix = if (vNet != "tcp") "&type=$vNet" + (if (vPath.isNotBlank()) "&path=${enc(vPath)}" else "") + (if (host.isNotBlank()) "&host=${enc(host)}" else "") else ""
         val url = when (mode) {
             "ssl" -> "ssh://${enc(user)}:${enc(pass)}@${host.trim()}:${port.ifBlank { "443" }.trim()}?sni=${enc(sni)}#${enc(name)}"
             "ssh" -> "ssh://${enc(user)}:${enc(pass)}@${host.trim()}:${port.ifBlank { "22" }.trim()}" +
                 (if (proxy.isNotBlank()) "?proxy=${enc(proxy)}" else "") + "#${enc(name)}"
             "slowdns" -> "slowdns://${enc(user)}:${enc(pass)}@${ns.trim()}?key=${enc(key)}#${enc(name)}"
+            "vless" -> "vless://${vId.trim()}@${host.trim()}:${port.ifBlank { "443" }.trim()}" +
+                "?encryption=none&security=${if (vTls) "tls" else "none"}" + (if (vTls && vSni.isNotBlank()) "&sni=${enc(vSni)}" else "") +
+                (if (vFlow) "&flow=xtls-rprx-vision" else "") + netSuffix + "#${enc(name)}"
+            "vmess" -> {
+                val j = org.json.JSONObject().put("v", "2").put("ps", name).put("add", host.trim())
+                    .put("port", port.ifBlank { "443" }).put("id", vId.trim()).put("aid", vAid.ifBlank { "0" })
+                    .put("scy", "auto").put("net", vNet).put("type", "none").put("host", host.trim())
+                    .put("path", vPath).put("tls", if (vTls) "tls" else "").put("sni", vSni)
+                "vmess://" + android.util.Base64.encodeToString(j.toString().toByteArray(), android.util.Base64.NO_WRAP)
+            }
+            "trojan" -> "trojan://${enc(vId)}@${host.trim()}:${port.ifBlank { "443" }.trim()}?sni=${enc(vSni.ifBlank { host.trim() })}" + netSuffix + "#${enc(name)}"
+            "ss" -> "ss://" + android.util.Base64.encodeToString("$vCipher:$vId".toByteArray(), android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING) +
+                "@${host.trim()}:${port.ifBlank { "8388" }.trim()}#${enc(name)}"
+            "wg" -> if (link.isNotBlank()) link else
+                "[Interface]\nPrivateKey = ${wgPriv.trim()}\nAddress = ${wgAddr.trim()}\nDNS = ${wgDns.trim()}\n\n" +
+                "[Peer]\nPublicKey = ${wgPeerKey.trim()}\n" + (if (wgPsk.isNotBlank()) "PresharedKey = ${wgPsk.trim()}\n" else "") +
+                "AllowedIPs = ${wgAllowed.trim()}\nEndpoint = ${wgEndpoint.trim()}\n"
             else -> link
         }
         val builtin = if (mode == "slowdns") Builtin.slowDns() else null
@@ -549,8 +585,54 @@ fun AddTweakDialog(onClose: () -> Unit, onSave: (Profile) -> Unit) {
                             OutlinedTextField(pass, { pass = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("SSH password") })
                         }
                     }
-                    else -> OutlinedTextField(link, { link = it }, Modifier.fillMaxWidth().heightIn(min = 100.dp),
-                        label = { Text(if (mode == "wg") "WireGuard config" else "Server link") })
+                    "vless", "vmess", "trojan" -> {
+                        OutlinedTextField(host, { host = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Address") }, placeholder = { Text("server.example.com") })
+                        OutlinedTextField(port, { port = it.filter { c -> c.isDigit() } }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Port") }, placeholder = { Text("443") })
+                        OutlinedTextField(vId, { vId = it }, Modifier.fillMaxWidth(), singleLine = true,
+                            label = { Text(if (mode == "trojan") "Password" else "UUID") })
+                        if (mode == "vmess") OutlinedTextField(vAid, { vAid = it.filter { c -> c.isDigit() } }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Alter ID") }, placeholder = { Text("0") })
+                        Box {
+                            OutlinedButton(onClick = { vNetMenu = true }, Modifier.fillMaxWidth()) { Text("Network: $vNet  ▾") }
+                            DropdownMenu(expanded = vNetMenu, onDismissRequest = { vNetMenu = false }) {
+                                listOf("tcp", "ws", "grpc").forEach { n -> DropdownMenuItem(text = { Text(n.uppercase()) }, onClick = { vNet = n; vNetMenu = false }) }
+                            }
+                        }
+                        if (vNet != "tcp") OutlinedTextField(vPath, { vPath = it }, Modifier.fillMaxWidth(), singleLine = true,
+                            label = { Text(if (vNet == "grpc") "Service name" else "Path") }, placeholder = { Text("/ws") })
+                        Row(Modifier.fillMaxWidth().clickable { vTls = !vTls }, verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(vTls, { vTls = it }); Text("TLS")
+                        }
+                        if (vTls || mode == "trojan") OutlinedTextField(vSni, { vSni = it }, Modifier.fillMaxWidth(), singleLine = true,
+                            label = { Text("SNI (optional)") }, placeholder = { Text(host.ifBlank { "same as address" }) })
+                        if (mode == "vless") Row(Modifier.fillMaxWidth().clickable { vFlow = !vFlow }, verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(vFlow, { vFlow = it }); Text("Flow: xtls-rprx-vision")
+                        }
+                    }
+                    "ss" -> {
+                        OutlinedTextField(host, { host = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Address") })
+                        OutlinedTextField(port, { port = it.filter { c -> c.isDigit() } }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Port") }, placeholder = { Text("8388") })
+                        Box {
+                            OutlinedButton(onClick = { vCipherMenu = true }, Modifier.fillMaxWidth()) { Text("Cipher: $vCipher  ▾") }
+                            DropdownMenu(expanded = vCipherMenu, onDismissRequest = { vCipherMenu = false }) {
+                                listOf("aes-256-gcm", "aes-128-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-256-gcm").forEach { m ->
+                                    DropdownMenuItem(text = { Text(m) }, onClick = { vCipher = m; vCipherMenu = false })
+                                }
+                            }
+                        }
+                        OutlinedTextField(vId, { vId = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Password") })
+                    }
+                    "wg" -> {
+                        OutlinedTextField(wgPriv, { wgPriv = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Private key") })
+                        OutlinedTextField(wgAddr, { wgAddr = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Address") }, placeholder = { Text("10.0.0.2/32") })
+                        OutlinedTextField(wgDns, { wgDns = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("DNS") })
+                        OutlinedTextField(wgPeerKey, { wgPeerKey = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Peer public key") })
+                        OutlinedTextField(wgPsk, { wgPsk = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Preshared key (optional)") })
+                        OutlinedTextField(wgEndpoint, { wgEndpoint = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Endpoint") }, placeholder = { Text("host:port") })
+                        OutlinedTextField(wgAllowed, { wgAllowed = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Allowed IPs") })
+                        TextButton(onClick = { link = "" }) { Text("Paste a full config instead ▾") }
+                        if (link.isNotEmpty() || wgPriv.isBlank()) OutlinedTextField(link, { link = it }, Modifier.fillMaxWidth().heightIn(min = 90.dp), label = { Text("Or paste the whole WireGuard config") })
+                    }
+                    else -> OutlinedTextField(link, { link = it }, Modifier.fillMaxWidth().heightIn(min = 100.dp), label = { Text("Server link") })
                 }
                 Text("Extras", color = WkMuted, fontSize = 12.sp)
                 @Composable fun chk(label: String, v: Boolean, set: (Boolean) -> Unit) {

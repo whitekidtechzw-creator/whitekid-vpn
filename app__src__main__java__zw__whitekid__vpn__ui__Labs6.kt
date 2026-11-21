@@ -35,6 +35,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import zw.whitekid.vpn.R
 import zw.whitekid.vpn.data.Profile
+import zw.whitekid.vpn.data.Proto
 import zw.whitekid.vpn.data.Store
 import zw.whitekid.vpn.vpn.Pinger
 import zw.whitekid.vpn.vpn.Status
@@ -134,9 +135,11 @@ fun ServerDeck(ui: ServerUi, group: String, selectedId: String?, autoPick: Boole
         AssistChip(onClick = { more = !more }, label = { Text(if (more) "Tools ▴" else "Tools ▾", fontSize = 12.sp) })
     }
     if (more) { Spacer(Modifier.height(8.dp)); ServerTools(ui, pings) }
-    val reach = inGroup.count { (pings[it.id] ?: -1) >= 0 }
+    val testable = inGroup.filter { it.proto != Proto.WIREGUARD && it.proto != Proto.SLOWDNS }
+    val reach = testable.count { (pings[it.id] ?: -1) >= 0 }
     val fastest = inGroup.mapNotNull { x -> pings[x.id]?.takeIf { it >= 0 }?.let { x.name to it } }.minByOrNull { it.second }
-    Text("${inGroup.size} servers • $reach reachable" + (fastest?.let { " • fastest ${it.first} ${it.second} ms" } ?: ""),
+    val reachTxt = if (testable.isEmpty()) "can't be pre-tested (tunnelled)" else "$reach of ${testable.size} reachable"
+    Text("${inGroup.size} servers • $reachTxt" + (fastest?.let { " • fastest ${it.first} ${it.second} ms" } ?: ""),
         color = WkMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 1, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
     L4ListFacts(all, pings)
     if (inGroup.size > 6) {
